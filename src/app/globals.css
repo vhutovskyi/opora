@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    /* 1. ADD YOUR OPORA COLORS HERE */
+    --color-opora-brown: #5E4838;
+    --color-opora-white: #F8F8F8;
+    --color-opora-softBeige: #EFEAE4;
+
+    /* 2. Keep all your existing shadcn/ui variables below... */
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+    --font-sans: var(--font-geist-sans);
+    /* ... rest of your variables ... */
+}

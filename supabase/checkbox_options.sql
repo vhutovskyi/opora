@@ -1,0 +1,9 @@
+-- Checkbox options — with NO schema change: this is an ordinary `options` axis with two values, "Так"/"Ні"
+-- (name = "З білими ніжками: Так", value = "Так"). The option type is read from the VALUE, exactly as
+-- the colour is read from the hex in value: hex → a circle, Так/Ні → a checkbox, any other text → a chip
+-- (see src/lib/constants.ts + catalog/[slug]/components/types.ts isBoolGroup).
+--
+-- This used to hold `delete from options where name ilike 'Колір ніжок:%'` — the cleanup of the
+-- previous (swatch) attempt for the legs. DO NOT RUN: the delete is global, and it wiped the axis
+-- for the chairs too, where it is needed (see restore_leg_color.sql). The bed importer no longer creates
+-- that axis, so there is nothing to remove — the file stays as documentation of the checkbox option format.
