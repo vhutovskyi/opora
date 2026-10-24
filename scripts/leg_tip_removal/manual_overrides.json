@@ -1,4 +1,0 @@
-{
-  "_comment": "Map a filename to a list of {x, y, w, h} pixel rectangles to force-correct when auto-detection misses a tip. Example below (inactive, key not a real filename):",
-  "_example.png": [{"x": 120, "y": 980, "w": 40, "h": 30}]
-}
