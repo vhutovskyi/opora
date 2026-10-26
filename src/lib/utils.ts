@@ -94,3 +94,13 @@ export const subRef = (s: { id: string; slug?: string | null }) => s.slug || s.i
 // (any depth); resolveSubRefs accepts both on read.
 export const catalogHref = (catalog: string, sub?: string) =>
   `/catalog?type=${encodeURIComponent(catalog)}${sub ? `&sub=${encodeURIComponent(sub)}` : ""}`;
+
+// One optFilter_<group> / specFilter_<group> URL value → the selected values. Option values are full
+// names ("Розмір: 900 (1300) × 650 мм, 18 мм") and may themselves contain commas, so they are split
+// only at a comma that starts the next "<group>:" name. Values without the prefix (specs) split on every comma.
+// Used by both parseCatalogParams (server) and useFilterState (client) — they must read a URL the same way.
+export function splitFilterValues(group: string, raw: string): string[] {
+  const prefix = group.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*:";
+  if (!new RegExp(`^\\s*${prefix}`).test(raw)) return raw.split(",");
+  return raw.split(new RegExp(`,(?=\\s*${prefix})`));
+}

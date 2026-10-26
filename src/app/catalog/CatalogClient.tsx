@@ -11,6 +11,7 @@ import ProductCardSkeleton from "@/components/ui/ProductCardSkeleton";
 import { FiltersIcon, SortingIcon } from "@/components/ui/Icons";
 import { CatalogProductDetails } from "@/lib";
 import { trackEvent } from "@/lib/analytics/umami";
+import { splitFilterValues } from "@/lib/utils";
 import type { SubcategoryOptionRow } from "@/lib/supabase/subcategoryTree";
 
 type CatalogClientProps = {
@@ -46,10 +47,15 @@ export default function CatalogClient({ initialProducts, initialNextCursor, filt
   const gridRef = useRef<HTMLElement>(null);
 
   // The filter/sorting changed → the server returned a new first batch: we start the list from scratch.
-  useEffect(() => {
+  // Reset DURING render (React's "adjusting state when a prop changes"), not in an effect: the effect ran
+  // one render late, so the first render after navigation paired the NEW filters (searchParams) with the
+  // OLD products — the cards mounted with the previous selection's data and kept its photo.
+  const [batch, setBatch] = useState(initialProducts);
+  if (batch !== initialProducts) {
+    setBatch(initialProducts);
     setProducts(initialProducts);
     setNextCursor(initialNextCursor);
-  }, [initialProducts, initialNextCursor]);
+  }
 
   // Loading more on scroll: a sentinel below the grid + rootMargin, so the batch arrives before the end of the list.
   useEffect(() => {
@@ -87,7 +93,7 @@ export default function CatalogClient({ initialProducts, initialNextCursor, filt
   const selectedColors = useMemo(() => {
     const colors: string[] = [];
     searchParams.forEach((val, key) => {
-      if (key.startsWith("optFilter_") && val) colors.push(...val.split(","));
+      if (key.startsWith("optFilter_") && val) colors.push(...splitFilterValues(key.slice(10), val));
     });
     return colors;
   }, [searchParams]);

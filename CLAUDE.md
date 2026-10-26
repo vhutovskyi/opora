@@ -16,9 +16,10 @@ npm run build      # next build
 npm run preview    # build + run on the Cloudflare Workers runtime locally (OpenNext)
 npm run deploy     # build + deploy to Cloudflare
 npm run cf-typegen # regenerate cloudflare-env.d.ts from wrangler bindings
+npm test           # unit tests (node:test, DB-free)
 ```
 
-No test suite. `next.config.ts` sets `typescript.ignoreBuildErrors: true`, so TS errors do **not** fail the build — **verify types with `npx tsc --noEmit`** when correctness matters. `npm run lint` (`next lint`) is currently broken under Next 16; rely on `tsc` instead.
+Unit tests: `npm test` runs `tests/**/*.test.mjs` on Node's built-in `node:test` — no test framework dependency. App code is TS with the `@/` alias, so `tests/helpers/loadCatalog.mjs` esbuild-bundles the real module first, swapping `./client` for an in-memory Supabase stub (`tests/helpers/supabaseStub.mjs`, fixture rows via `setDb`) and `next/cache` for a passthrough. Coverage so far: the catalog filters (`catalog.ts`) and `splitFilterValues`. The `scripts/check-*.mjs` files are separate checks against the real DB/folders. `next.config.ts` sets `typescript.ignoreBuildErrors: true`, so TS errors do **not** fail the build — **verify types with `npx tsc --noEmit`** when correctness matters. `npm run lint` (`next lint`) is currently broken under Next 16; rely on `tsc` instead.
 
 ## Architecture
 

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { buildSubcategoryTrees, resolveSubRefs, type SubcategoryOptionRow } from "@/lib/supabase/subcategoryTree";
-import { subRef } from "@/lib/utils";
+import { splitFilterValues, subRef } from "@/lib/utils";
 import type { FilterChip } from "./FilterChips";
 import { shortValue } from "./filterFormat";
 import type { DynamicFilters } from "./types";
@@ -18,7 +18,7 @@ function parsePrefixedFiltersFromUrl(searchParams: URLSearchParams, prefix: stri
   const result: Record<string, string[]> = {};
   searchParams.forEach((value, key) => {
     if (key.startsWith(prefix)) {
-      result[key.slice(prefix.length)] = value.split(",");
+      result[key.slice(prefix.length)] = splitFilterValues(key.slice(prefix.length), value);
     }
   });
   return result;

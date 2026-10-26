@@ -2,7 +2,7 @@ import { unstable_cache } from "next/cache";
 import { BOOL_YES, optionValueRank } from "@/lib/constants";
 import { supabaseAdmin } from "./client";
 import { imageGroupKey } from "./imageGroups";
-import { productHref, productRef } from "@/lib/utils";
+import { productHref, productRef, splitFilterValues } from "@/lib/utils";
 import { resolveSubRefs, type SubcategoryOptionRow } from "./subcategoryTree";
 import {
   CatalogProductDetails,
@@ -15,13 +15,16 @@ import {
 
 type OptionRow = { name: string | null; value: string | null };
 type ImageRow = { url: string; url_compressed: string | null };
-type VariantRow = {
+type SortableVariantRow = {
   id: string;
   price: number | null;
   discounted_price: number | null;
+  visible: boolean | null;
   sort_order: number | null;
-  variant_images: { sort_order: number | null; images: ImageRow | null }[] | null;
   variant_options: { options: OptionRow | null }[] | null;
+};
+type VariantRow = SortableVariantRow & {
+  variant_images: { sort_order: number | null; images: ImageRow | null }[] | null;
 };
 type CatalogRow = {
   id: string;
@@ -33,16 +36,50 @@ type CatalogRow = {
   variants: VariantRow[] | null;
 };
 // priceLo/priceHi: true min/max across ALL of the product's variants (not just min_price) —
-// bounds and the price filter need the real range, or an expensive colour/size never shows up (see computeBounds).
-type BaseProduct = CatalogProductDetails & { createdAt: string; allOptionNames: string[]; priceLo: number; priceHi: number };
+// the unfiltered slider bounds need the real range, or an expensive colour/size never shows up (see computeBounds).
+type BaseProduct = CatalogProductDetails & { createdAt: string; priceLo: number; priceHi: number };
 
 const isAllCategory = (types: string[]) => types.length === 0 || types.includes("Всі") || types.includes("All");
+
+// The price filter, the slider bounds and the filtered price sort all use the MAIN price (variants.price),
+// never discounted_price — a deliberate business rule: a sale doesn't move a product into a cheaper range.
+// The card still shows the sale price (priceFields), so a "від 10 000" card may read 9 000 ₴ in red.
+const priceFields = (price: number, discounted: number) => ({
+  price: String(price),
+  discountedPrice: discounted > 0 && discounted < price ? String(discounted) : undefined,
+});
+
+const linkedOptions = (v: SortableVariantRow) =>
+  (v.variant_options || []).map((vo) => vo.options).filter(Boolean) as OptionRow[];
+
+// Storefront-visible variants in page order — the same order products.ts uses, so the first variant of
+// each look is the page default. Hidden variants (visible=false) used to leak into the cards as swatches.
+// Checkbox options ("Так") — to the end, as on the product page: the card shows the unticked checkboxes.
+// Priority values ("Щит" and so on) — to the front. A sum, not a minimum — so that priority on one axis
+// doesn't drown out priority on another (see products.ts).
+// ponytail: sort keys computed once per variant, not inside the comparator (see visibleSorted in products.ts).
+function orderVariants<T extends SortableVariantRow>(rows: T[] | null): T[] {
+  return (rows || [])
+    .filter((v) => v.visible !== false)
+    .map((v) => {
+      const linked = linkedOptions(v);
+      return {
+        v,
+        bool: linked.some((o) => o.value === BOOL_YES) ? 1 : 0,
+        rank: linked.reduce((sum, o) => sum + optionValueRank(o.value || ""), 0),
+        order: v.sort_order || 0,
+      };
+    })
+    .sort((a, b) => a.bool - b.bool || a.rank - b.rank || a.order - b.order)
+    .map((d) => d.v);
+}
 
 // ponytail: the worker gets the bare minimum for a card — one variant per group of "identical photos"
 // (imageGroupKey: size/lamels don't change the look) × at most 2 URLs (the main one + hover),
 // compressed. It used to be 7.1MB and 3071 variants on EVERY request (the cache didn't fit the 2MB limit and was
-// disabled) → Cloudflare 1102. Now it is ~800 variants / 0.48MB (measured 27.07.2026, the "Всі"
-// catalog — the biggest entry), so the query is cached again. Adding a field means measuring again.
+// disabled) → Cloudflare 1102. Now it is ~2300 variations / 1.15MB (measured 26.10.2026, the "Всі"
+// catalog — the biggest entry), so the query is cached again. Adding a field means measuring again —
+// per-variant filter data lives in the separate variant index for that reason (fetchVariantFilterIndex).
 // We don't read the legacy photos[] arrays here: variants without variant_images don't have them either.
 async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<BaseProduct[]> {
   // We filter the subcatalog only within the selected catalogs (on "Всі" it plays no role).
@@ -54,7 +91,7 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
     .select(
       `id, slug, model, min_price, created_at, catalog,
        ${filterBySub ? "product_subcategories!inner ( subcategory_option_id )," : ""}
-       variants ( id, price, discounted_price, sort_order, variant_images ( sort_order, images ( url, url_compressed ) ), variant_options ( options ( name, value ) ) )`
+       variants ( id, price, discounted_price, visible, sort_order, variant_images ( sort_order, images ( url, url_compressed ) ), variant_options ( options ( name, value ) ) )`
     )
     .eq("visible", true)
     // The photos-per-variant limit is counted by Postgres, not by the worker.
@@ -69,39 +106,21 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
 
   return (data as unknown as CatalogRow[])
     .map((product) => {
-      const allOptionNames = new Set<string>();
       const seenLooks = new Set<string>();
       const variations: VariationImage[] = [];
-      // Checkbox options ("Так") — to the end, as on the product page: the card shows the unticked checkboxes.
-      const boolYes = (v: VariantRow) =>
-        (v.variant_options || []).some((vo) => vo.options?.value === BOOL_YES) ? 1 : 0;
-      // Priority values ("Щит" and so on) — to the front, as on the product page. A sum, not a minimum —
-      // so that priority on one axis doesn't drown out priority on another (see products.ts).
-      const rank = (v: VariantRow) =>
-        (v.variant_options || []).reduce((sum, vo) => sum + optionValueRank(vo.options?.value || ""), 0);
-      // ponytail: sort keys computed once per variant, not inside the comparator — it used to
-      // re-scan both sides' options on every comparison (see visibleSorted in products.ts).
-      const ordered = (product.variants || [])
-        .map((v) => ({ v, bool: boolYes(v), rank: rank(v), order: v.sort_order || 0 }))
-        .sort((a, b) => a.bool - b.bool || a.rank - b.rank || a.order - b.order)
-        .map((d) => d.v);
+      const ordered = orderVariants(product.variants);
       for (const variation of ordered) {
-        const linked = (variation.variant_options || []).map((vo) => vo.options).filter(Boolean) as OptionRow[];
-        const names = linked.map((o) => o.name || "").filter(Boolean);
-        for (const name of names) allOptionNames.add(name);
-        const look = imageGroupKey(names);
+        const linked = linkedOptions(variation);
+        const look = imageGroupKey(linked.map((o) => o.name || "").filter(Boolean));
         if (seenLooks.has(look)) continue;
         seenLooks.add(look);
-        const price = Number(variation.price || 0);
-        const discounted = Number(variation.discounted_price || 0);
         variations.push({
           id: variation.id,
           allHexes: linked.map((o) => ({ hex: o.value || "", name: o.name || "" })),
           images: (variation.variant_images || [])
             .filter((r) => r.images)
             .map((r) => r.images!.url_compressed || r.images!.url),
-          price: String(price),
-          discountedPrice: discounted > 0 && discounted < price ? String(discounted) : undefined,
+          ...priceFields(Number(variation.price || 0), Number(variation.discounted_price || 0)),
         });
       }
       const variantPrices = ordered.map((v) => Number(v.price || 0)).filter((p) => p > 0);
@@ -116,7 +135,6 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
         createdAt: product.created_at || "",
         catalog: product.catalog,
         variations,
-        allOptionNames: [...allOptionNames],
       };
     })
     .filter((p) => p.variations.length > 0);
@@ -125,23 +143,69 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
 // ponytail: previously every catalog request pulled all the variant_specs (40k rows) for the sake of
 // the spec filter. Now it is a separate cached index of the filterable specs only
 // (currently there are 0 of them → 0 rows), and it is read only when the filter is actually applied.
-type SpecIndexRow = { value: string | null; specs: { name: string | null } | null; variants: { product_id: string } | null };
+// Keyed by VARIANT, not product: specs are per-variant, and a product-level union let one variant
+// satisfy one spec group and another variant the next (see matchingVariants).
+type SpecIndexRow = { value: string | null; variant_id: string | null; specs: { name: string | null } | null };
 
 async function fetchSpecFilterIndex(): Promise<Record<string, Record<string, string[]>>> {
   const { data } = await supabaseAdmin()
     .from("variant_specs")
-    .select("value, specs!inner ( name ), variants!inner ( product_id )")
+    .select("value, variant_id, specs!inner ( name )")
     .eq("specs.filterable", true);
 
   const index: Record<string, Record<string, string[]>> = {};
   for (const row of (data || []) as unknown as SpecIndexRow[]) {
     const name = row.specs?.name;
-    const productId = row.variants?.product_id;
-    if (!name || !productId) continue;
-    const byName = (index[productId] ||= {});
+    const variantId = row.variant_id;
+    if (!name || !variantId) continue;
+    const byName = (index[variantId] ||= {});
     const values = (byName[name] ||= []);
     const value = String(row.value || "");
     if (!values.includes(value)) values.push(value);
+  }
+  return index;
+}
+
+// ponytail: every visible variant's options + price, for matching filters on ONE variant. The base keeps
+// one variant per look, so it can't answer "is there a white 160 cm bed" — and checking each filter against
+// the product's union of options/prices made AND behave like OR (a white 90 + a black 160 matched
+// "Білий AND 160"). Kept out of the base on purpose: inside it the base would be ~1.7MB+ (2MB limit), here
+// it is its own ~0.75MB entry (measured 26.10.2026, 8976 variants), read only when a filter is applied.
+// Tuples + per-product interned strings keep it that small. Adding a field means measuring again.
+// [variant id, index into looks, price, discounted_price, indices into names]
+type IndexedVariant = [string, number, number, number, number[]];
+// looks are imageGroupKey strings, not positions in the base's variations: the two cache entries
+// revalidate independently, so a position could point at another product version's look.
+type VariantIndexEntry = { names: string[]; looks: string[]; variants: IndexedVariant[] };
+
+async function fetchVariantFilterIndex(): Promise<Record<string, VariantIndexEntry>> {
+  const { data, error } = await supabaseAdmin()
+    .from("products")
+    .select("id, variants ( id, price, discounted_price, visible, sort_order, variant_options ( options ( name, value ) ) )")
+    .eq("visible", true);
+  if (error) throw error;
+
+  const intern = (list: string[], at: Map<string, number>, key: string) => {
+    let i = at.get(key);
+    if (i === undefined) at.set(key, (i = list.push(key) - 1));
+    return i;
+  };
+  const index: Record<string, VariantIndexEntry> = {};
+  for (const product of (data || []) as unknown as { id: string; variants: SortableVariantRow[] | null }[]) {
+    const entry: VariantIndexEntry = { names: [], looks: [], variants: [] };
+    const nameAt = new Map<string, number>();
+    const lookAt = new Map<string, number>();
+    for (const v of orderVariants(product.variants)) {
+      const names = linkedOptions(v).map((o) => o.name || "").filter(Boolean);
+      entry.variants.push([
+        v.id,
+        intern(entry.looks, lookAt, imageGroupKey(names)),
+        Number(v.price || 0),
+        Number(v.discounted_price || 0),
+        names.map((n) => intern(entry.names, nameAt, n)),
+      ]);
+    }
+    index[product.id] = entry;
   }
   return index;
 }
@@ -280,32 +344,62 @@ const getCatalogBase = unstable_cache(fetchCatalogBase, ["catalog-base"], {
   tags: ["catalog"],
 });
 
-const getSpecFilterIndex = unstable_cache(fetchSpecFilterIndex, ["catalog-spec-index"], {
+// New key: the old entry was keyed by product id, which the per-variant lookup would misread.
+const getSpecFilterIndex = unstable_cache(fetchSpecFilterIndex, ["catalog-spec-index-by-variant"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
 
-// ponytail: apply option + spec filters (before price range), shared by both getFilteredCatalog and getCatalogAndBounds.
-// Extracted to avoid duplicating the filter pass when both the sorted catalog AND price bounds are needed.
-async function filterCatalogBeforePrice(base: BaseProduct[], optionFilters: Record<string, string[]>, specFilters: Record<string, string[]>): Promise<BaseProduct[]> {
-  const specGroups = Object.entries(specFilters).filter(([, v]) => v.length > 0);
-  let catalog = base;
+const getVariantFilterIndex = unstable_cache(fetchVariantFilterIndex, ["catalog-variant-index"], {
+  revalidate: 3600,
+  tags: ["catalog"],
+});
 
-  // Options: AND between groups, OR inside a group.
-  const optionGroups = Object.values(optionFilters).filter((v) => v.length > 0);
-  if (optionGroups.length > 0) {
-    catalog = catalog.filter((p) => optionGroups.every((names) => names.some((n) => p.allOptionNames.includes(n))));
+// The product's variants matching EVERY option group (OR inside a group) and every spec group —
+// all on the same variant. A product matches if at least one of its variants does.
+function matchingVariants(
+  entry: VariantIndexEntry,
+  optionGroups: string[][],
+  specGroups: [string, string[]][],
+  specIndex: Record<string, Record<string, string[]>>
+): IndexedVariant[] {
+  const groups = optionGroups.map((names) => new Set(names.map((n) => entry.names.indexOf(n)).filter((i) => i >= 0)));
+  if (groups.some((g) => g.size === 0)) return [];
+  return entry.variants.filter(
+    ([id, , , , options]) =>
+      groups.every((g) => options.some((i) => g.has(i))) &&
+      specGroups.every(([specName, selected]) => selected.some((s) => (specIndex[id]?.[specName] || []).includes(s)))
+  );
+}
+
+// The main price — see priceFields for why the sale price never takes part in filtering.
+const variantPrice = (v: IndexedVariant) => v[2];
+
+// The card for a filtered product: only the looks that have a matching variant (other colours used to
+// stay on the card as swatches), each represented by its FIRST matching variant — its id and price, so the
+// card links to and prices the variant that matched (the 160 cm bed, not the look's default 90 cm one).
+// null when no look survives — the base and the index can be out of step for a minute after an edit.
+function narrowProduct(product: BaseProduct, entry: VariantIndexEntry, matches: IndexedVariant[]): BaseProduct | null {
+  const firstByLook = new Map<string, IndexedVariant>();
+  for (const v of matches) {
+    const look = entry.looks[v[1]];
+    if (!firstByLook.has(look)) firstByLook.set(look, v);
   }
-
-  // Specs: a product matches if AT LEAST ONE of its variants matches.
-  if (specGroups.length > 0) {
-    const specIndex = await getSpecFilterIndex();
-    catalog = catalog.filter((p) =>
-      specGroups.every(([specName, selected]) => selected.some((s) => (specIndex[p.id]?.[specName] || []).includes(s)))
-    );
+  const variations: VariationImage[] = [];
+  for (const variation of product.variations) {
+    const v = firstByLook.get(imageGroupKey(variation.allHexes.map((h) => h.name).filter(Boolean)));
+    if (v) variations.push({ ...variation, id: v[0], ...priceFields(v[2], v[3]) });
   }
-
-  return catalog;
+  if (variations.length === 0) return null;
+  const prices = matches.map(variantPrice).filter((p) => p > 0);
+  return {
+    ...product,
+    variations,
+    // What price_asc/price_desc sort by: the cheapest variant that actually matched.
+    price: prices.length > 0 ? Math.min(...prices) : product.price,
+    priceLo: prices.length > 0 ? Math.min(...prices) : 0,
+    priceHi: prices.length > 0 ? Math.max(...prices) : 0,
+  };
 }
 
 function sortCatalog(catalog: BaseProduct[], sort: string): BaseProduct[] {
@@ -324,9 +418,9 @@ function sortCatalog(catalog: BaseProduct[], sort: string): BaseProduct[] {
   return sorted;
 }
 
-// Bounds and the filter below both use priceLo/priceHi (the true per-product range) — using
-// products.min_price for both made an expensive colour/size invisible to the slider AND the filter;
-// using the priciest variant for bounds alone made the slider's max unreachable by a min_price-only filter.
+// Bounds use priceLo/priceHi — the true range of the variants still in play (all of them unfiltered,
+// the matching ones after option/spec filters) — using products.min_price made an expensive
+// colour/size invisible to the slider.
 function computeBounds(catalog: BaseProduct[]): { min: number; max: number } | null {
   if (catalog.length === 0) return null;
   let min = Infinity;
@@ -339,43 +433,54 @@ function computeBounds(catalog: BaseProduct[]): { min: number; max: number } | n
 }
 
 export async function getFilteredCatalog(params: FilterParamsWithArrays): Promise<CatalogProductDetails[]> {
-  const { type, sub = [], sort = "default", optionFilters = {}, specFilters = {}, priceMin, priceMax } = params;
-  const catalogNames = isAllCategory(type) ? [] : [...type].sort();
-
-  const base = await getCatalogBase(catalogNames, catalogNames.length > 0 ? [...sub].sort() : []);
-  let catalog = await filterCatalogBeforePrice(base, optionFilters, specFilters);
-
-  // Range overlap: a product matches if ANY of its variants could fall in [priceMin, priceMax],
-  // not just its cheapest one (products.min_price, what price_asc/price_desc still sorts by).
-  if (priceMin != null) catalog = catalog.filter((p) => p.priceHi >= priceMin);
-  if (priceMax != null) catalog = catalog.filter((p) => p.priceLo <= priceMax);
-
-  const sorted = sortCatalog(catalog, sort);
-  return sorted.map(({ createdAt, priceLo, priceHi, ...rest }) => rest);
+  return (await getCatalogAndBounds(params)).products;
 }
 
-// Both the filtered, sorted catalog AND the price bounds for its filter range.
-// Used by the catalog page, which needs both together. Computes the pre-price-filter list once
-// and derives both results from it, rather than running the filter pass twice.
+// Both the filtered, sorted catalog AND the price bounds for its filter range (the catalog page needs both;
+// api/catalog and the feed only the list — bounds cost one pass over the already filtered array).
+// Every filter — options, specs AND the price range — must hold for one and the same variant.
 export async function getCatalogAndBounds(
   params: FilterParamsWithArrays
 ): Promise<{ products: CatalogProductDetails[]; bounds: { min: number; max: number } | null }> {
   const { type, sub = [], sort = "default", optionFilters = {}, specFilters = {}, priceMin, priceMax } = params;
   const catalogNames = isAllCategory(type) ? [] : [...type].sort();
+  const optionGroups = Object.values(optionFilters).filter((v) => v.length > 0);
+  const specGroups = Object.entries(specFilters).filter(([, v]) => v.length > 0);
+  const hasPrice = priceMin != null || priceMax != null;
 
   const base = await getCatalogBase(catalogNames, catalogNames.length > 0 ? [...sub].sort() : []);
-  // Compute bounds WITHOUT price filters (so the range shows what's available for the selected options/specs).
-  const prePrice = await filterCatalogBeforePrice(base, optionFilters, specFilters);
-  const bounds = computeBounds(prePrice);
+  let prePrice = base;
+  let catalog = base;
+  if (optionGroups.length > 0 || specGroups.length > 0 || hasPrice) {
+    const [index, specIndex] = await Promise.all([
+      getVariantFilterIndex(),
+      specGroups.length > 0 ? getSpecFilterIndex() : Promise.resolve({}),
+    ]);
+    const inPrice = (v: IndexedVariant) => {
+      const p = variantPrice(v);
+      return p > 0 && (priceMin == null || p >= priceMin) && (priceMax == null || p <= priceMax);
+    };
+    prePrice = [];
+    catalog = [];
+    for (const product of base) {
+      const entry = index[product.id];
+      if (!entry) continue;
+      const matches = matchingVariants(entry, optionGroups, specGroups, specIndex);
+      const narrowed = matches.length > 0 ? narrowProduct(product, entry, matches) : null;
+      if (!narrowed) continue;
+      // Bounds WITHOUT the price filter, so the slider shows what's available for the selected options/specs.
+      prePrice.push(narrowed);
+      if (!hasPrice) catalog.push(narrowed);
+      else {
+        const inRange = matches.filter(inPrice);
+        const priced = inRange.length > 0 ? narrowProduct(product, entry, inRange) : null;
+        if (priced) catalog.push(priced);
+      }
+    }
+  }
 
-  // Then apply price filters and sorting for the final product list (same range-overlap rule as getFilteredCatalog).
-  let catalog = prePrice;
-  if (priceMin != null) catalog = catalog.filter((p) => p.priceHi >= priceMin);
-  if (priceMax != null) catalog = catalog.filter((p) => p.priceLo <= priceMax);
-  const sorted = sortCatalog(catalog, sort);
-  const products = sorted.map(({ createdAt, priceLo, priceHi, ...rest }) => rest);
-
-  return { products, bounds };
+  const products = sortCatalog(catalog, sort).map(({ createdAt, priceLo, priceHi, ...rest }) => rest);
+  return { products, bounds: computeBounds(prePrice) };
 }
 
 // The catalog query parameters → FilterParamsWithArrays. Shared by the page and api/catalog,
@@ -388,8 +493,8 @@ export async function parseCatalogParams(
   const specFilters: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (typeof value !== "string") continue;
-    if (key.startsWith("optFilter_")) optionFilters[key.slice(10)] = value.split(",");
-    else if (key.startsWith("specFilter_")) specFilters[key.slice(11)] = value.split(",");
+    if (key.startsWith("optFilter_")) optionFilters[key.slice(10)] = splitFilterValues(key.slice(10), value);
+    else if (key.startsWith("specFilter_")) specFilters[key.slice(11)] = splitFilterValues(key.slice(11), value);
   }
   const num = (v: string | string[] | undefined) => {
     const n = typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;

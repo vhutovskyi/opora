@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import Image from '@/components/ui/OptimizedImage';
 import { CatalogProductDetails, VariationImage, MOCK_PRODUCT_IMAGES } from '@/lib';
@@ -8,6 +8,7 @@ import { CF_IMAGE_WIDTH_CARD } from '@/lib/utils';
 // Pure helper, no server imports — the same source of truth the dedup itself uses.
 import { isVisualOption } from '@/lib/supabase/imageGroups';
 import { trackEvent } from '@/lib/analytics/umami';
+import { activeCardVariation, orderSwatchColors, type CardPick } from './cardVariation';
 
 // ponytail: different furniture is photographed with a different margin around it — hence the card
 // uses a different zoom instead of one value for every catalog.
@@ -52,7 +53,9 @@ export default function ProductCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedColors]);
 
-  // Price range check — same field (variant.price, not discountedPrice) the catalog filter itself uses (catalog.ts).
+  // Price range check — the main price (variant.price, not discountedPrice), as the catalog filter itself
+  // checks it (catalog.ts variantPrice). The catalog already sends only matching looks, each represented by
+  // its matching variant; this keeps TopProducts-style callers and stale responses consistent.
   const hasPriceFilter = priceMin != null || priceMax != null;
   const matchesPrice = (variation: VariationImage) => {
     if (!hasPriceFilter) return true;
@@ -71,12 +74,11 @@ export default function ProductCard({
 
   // Colour (hex) options only — material ones (Масив/Щит) are rendered as a string, not as a colour.
   const isHex = (v: string) => /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test((v || "").trim());
-  // ponytail: the swatch gradient is drawn hexes[0]→hexes[1], and the option order from the DB isn't guaranteed —
-  // so the legs always come second: otherwise the diagonal in neighbouring cards points in different directions.
+  // The swatch gradient is drawn hexes[0]→hexes[1], and the option order from the DB isn't guaranteed —
+  // orderSwatchColors fixes it (legs always in the bottom half, see cardVariation.ts). The same order makes
+  // the dedup key below stable, so one colour pair stored both ways round is one circle, not two.
   const colorHexesOf = (variation: VariationImage) =>
-    (variation.allHexes ?? [])
-      .filter((h) => isHex(h.hex))
-      .sort((a, b) => Number(a.name.startsWith("Колір ніжок")) - Number(b.name.startsWith("Колір ніжок")));
+    orderSwatchColors((variation.allHexes ?? []).filter((h) => isHex(h.hex)));
 
   // The variant order is set in the admin panel (a linked array on the product) — we leave it as it is.
   // If a colour filter is applied — we move the variants matching it to the front,
@@ -121,21 +123,21 @@ export default function ProductCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colorVariations, initialIndex, anyFilterActive]);
 
-  // State to track which color variation the user is currently looking at —
-  // by default we show the first variant matching the filter (if there is one),
-  // otherwise — the first one visible on the card (the first circle).
-  const [activeVariation, setActiveVariation] = useState<VariationImage | undefined>(
-    variations.find(matchesFilter) ?? swatchesToShow[0] ?? variations[0]
-  );
-
-  // When the filter changes (and the product stays in the list) — we switch the active
-  // variant to the one matching the selected colours.
-  useEffect(() => {
-    if (!anyFilterActive) return;
-    const matched = variations.find(matchesFilter);
-    if (matched) setActiveVariation(matched);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedColors, priceMin, priceMax]);
+  // Which color variation the user is currently looking at — derived on every render (see cardVariation.ts):
+  // the hovered/clicked swatch while it belongs to the current data + filters, otherwise the first variant
+  // matching the filter, otherwise the first circle. Only the pick itself is state.
+  const filterKey = `${selectedColors.join("|")}~${priceMin ?? ""}~${priceMax ?? ""}`;
+  const [pick, setPick] = useState<CardPick | null>(null);
+  const activeVariation = activeCardVariation({
+    variations,
+    source: product.variations,
+    filterKey,
+    pick,
+    matches: matchesFilter,
+    firstSwatch: swatchesToShow[0],
+  });
+  const setActiveVariation = (variation: VariationImage) =>
+    setPick({ id: variation.id, variations: product.variations, filterKey });
 
   // Safely extract the images for the *currently active* variation.
   // If there are no photos at all — we show temporary mock images.
