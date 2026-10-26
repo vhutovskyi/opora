@@ -5,6 +5,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { BOOL_NO, BOOL_YES } from "@/lib/constants";
 import type { Model3D } from "@/lib/models3d";
+import CompareButton from "./CompareButton";
 import { AccessoryLink, Option, OptionGroup, Product, VariantSummary, chipLabel, hexColor, isBoolGroup, isHexColor, isSelectGroup, optKind } from "./types";
 
 // The modal with an option axis description — only after a click on ℹ.
@@ -454,6 +455,12 @@ export default function BuyBox({
       >
         {isUnavailable ? 'Немає в наявності' : 'Додати до кошика'}
       </button>
+
+      <CompareButton
+        variantId={activeVariant?.id}
+        catalog={product.catalog}
+        productName={product.model || product.name}
+      />
 
       {/* 3D/AR — only for products that have a model (see src/lib/models3d.ts) */}
       {model3d && (

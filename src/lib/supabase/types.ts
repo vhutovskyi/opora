@@ -51,6 +51,14 @@ export interface ProductDetailVariant extends VariantMedia {
   options: ProductDetailOption[];
 }
 
+// One column of the /compare page: a variant together with the product it belongs to.
+export interface CompareVariant extends ProductDetailVariant {
+  productId: string;
+  slug: string | null;
+  model: string;
+  catalog: string;
+}
+
 export interface ProductAccessoryLink {
   id: string; // product_accessories.id
   product: {

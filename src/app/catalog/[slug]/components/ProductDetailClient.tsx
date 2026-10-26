@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, UIEvent, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useCartStore } from "@/store/cartStore";
@@ -19,6 +19,7 @@ import { Option, Product, Variant, VariantMedia, VariantSummary, optKind } from 
 
 import { findVariantForOption, getOptionGroups, isOptionAvailable as isOptionAvailableIn } from "./variantSelection";
 import { useVariantMedia } from "../useVariantMedia";
+import { useFullscreenGallery } from "../useFullscreenGallery";
 import ProductGallery from "./ProductGallery";
 import BuyBox from "./BuyBox";
 import AssemblyVideo from "./AssemblyVideo";
@@ -73,16 +74,8 @@ export default function ProductDetailClient({
   const [accessoryQty, setAccessoryQty] = useState<Record<string, number>>({});
   const [activeAccessoryModalId, setActiveAccessoryModalId] = useState<string | null>(null);
 
-  // Gallery state
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [fullscreenSlide, setFullscreenSlide] = useState(0);
-  // Mount the gallery only after the first open (then keep it for the closing animation).
-  const [galleryMounted, setGalleryMounted] = useState(false);
-
   // Whether the header is visible — lets the sticky block adjust its top offset (same logic as Header)
   const [headerVisible, setHeaderVisible] = useState(true);
-
-  const fullscreenSliderRef = useRef<HTMLDivElement>(null);
 
   // Variant media: the initially active one arrives as a prop, the rest are fetched on option select.
   const { byId: mediaById, load: loadMedia } = useVariantMedia(initialVariant?.id, initialMedia);
@@ -155,47 +148,7 @@ export default function ProductDetailClient({
       ? shownMedia.imagesCompressed
       : currentImages;
 
-  // Reliable scroll sync for the fullscreen gallery
-  useEffect(() => {
-    if (isFullscreen && fullscreenSliderRef.current) {
-      // Give the browser a moment to render the DOM before scrolling
-      requestAnimationFrame(() => {
-        if (fullscreenSliderRef.current) {
-           fullscreenSliderRef.current.scrollLeft = fullscreenSliderRef.current.offsetWidth * fullscreenSlide;
-        }
-      });
-    }
-  }, [isFullscreen, fullscreenSlide]);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isFullscreen) return;
-
-      if (e.key === "ArrowRight" && fullscreenSlide < currentImages.length - 1) {
-        scrollToFullscreenImage(fullscreenSlide + 1);
-      } else if (e.key === "ArrowLeft" && fullscreenSlide > 0) {
-        scrollToFullscreenImage(fullscreenSlide - 1);
-      } else if (e.key === "Escape") {
-        setIsFullscreen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isFullscreen, fullscreenSlide, currentImages.length]);
-
-  useEffect(() => {
-    if (isFullscreen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "unset";
-    }
-
-    // Cleanup on unmount (in case the user navigates to another page)
-    return () => {
-      document.body.style.overflow = "unset";
-    };
-  }, [isFullscreen]);
+  const gallery = useFullscreenGallery(currentImages.length);
 
   // Track header visibility (as in Header): visible when scrolling up or near the top
   useEffect(() => {
@@ -208,18 +161,6 @@ export default function ProductDetailClient({
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
-
-  const handleWheelScroll = (e: React.WheelEvent<HTMLDivElement>) => {
-    const slider = fullscreenSliderRef.current;
-    if (!slider) return;
-
-    // If the user swipes horizontally (e.g. on a trackpad) the browser
-    // handles it natively, so we do nothing.
-    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-
-    // Turn vertical mouse-wheel movement into horizontal scrolling
-    slider.scrollLeft += e.deltaY;
-  };
 
   const toggleAccordion = (section: string) => {
     setOpenSections((prevSections) =>
@@ -284,29 +225,9 @@ export default function ProductDetailClient({
     });
   };
 
-  // Gallery logic
-  const handleFullscreenScroll = (e: UIEvent<HTMLDivElement>) => {
-    if (!e.currentTarget) return;
-    const scrollLeft = e.currentTarget.scrollLeft;
-    const width = e.currentTarget.offsetWidth;
-    setFullscreenSlide(Math.round(scrollLeft / width));
-  };
-
   const openGallery = (index: number) => {
     trackEvent("Відкрито галерею", { product: product.model || product.name, index });
-    setFullscreenSlide(index);
-    setGalleryMounted(true);
-    setIsFullscreen(true);
-  };
-
-  const scrollToFullscreenImage = (index: number) => {
-    setFullscreenSlide(index);
-    if (fullscreenSliderRef.current) {
-      fullscreenSliderRef.current.scrollTo({
-        left: fullscreenSliderRef.current.offsetWidth * index,
-        behavior: 'smooth'
-      });
-    }
+    gallery.open(index);
   };
 
   const handleOptionSelect = (key: string, value: string) => {
@@ -488,18 +409,7 @@ export default function ProductDetailClient({
       {/* RECENTLY VIEWED — history from localStorage, under the reviews */}
       <RecentlyViewed current={recentlyViewedCurrent} />
 
-      {galleryMounted && (
-        <FullscreenGallery
-          images={currentImages}
-          isOpen={isFullscreen}
-          activeSlide={fullscreenSlide}
-          sliderRef={fullscreenSliderRef}
-          onClose={() => setIsFullscreen(false)}
-          onScroll={handleFullscreenScroll}
-          onWheel={handleWheelScroll}
-          onThumbClick={scrollToFullscreenImage}
-        />
-      )}
+      {gallery.mounted && <FullscreenGallery images={currentImages} {...gallery.galleryProps} />}
 
       {activeAccessoryModalId && (() => {
         const link = product.accessories.find((a) => a.id === activeAccessoryModalId);

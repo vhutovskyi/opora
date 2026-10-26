@@ -122,3 +122,11 @@ export const PlayIcon = ({ className }: { className?: string }) => (
         <path d="M4 38.7753L33 22.7753L4 6.77527V38.7753ZM7.22222 33.9753L27.5222 22.7753L7.22222 11.5753V33.9753ZM10.4444 29.1753L22.0444 22.7753L10.4444 16.3753V29.1753ZM13.6667 24.3753L16.5667 22.7753L13.6667 21.1753V24.3753Z" stroke="#EFEAE4" strokeWidth="8"/>
     </svg>
 );
+// Comparison (a balance scale) — the header link to /compare and the product page button.
+export const CompareIcon = ({ className }: { className?: string }) => (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 3V21M7 21H17M3 7H5C7 7 10 6 12 5C14 6 17 7 19 7H21" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M2 16L5 8L8 16C7.13 16.65 6.08 17 5 17C3.92 17 2.87 16.65 2 16Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M16 16L19 8L22 16C21.13 16.65 20.08 17 19 17C17.92 17 16.87 16.65 16 16Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+);

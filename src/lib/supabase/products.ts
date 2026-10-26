@@ -6,6 +6,7 @@ import { supabaseAdmin, isMissingTable, isMissingColumn, byIdOrSlug } from "./cl
 import { imageGroupKey } from "./imageGroups";
 import { productHref } from "@/lib/utils";
 import {
+  CompareVariant,
   ProductAccessoryLink,
   ProductDetail,
   ProductDetails,
@@ -499,6 +500,52 @@ export const getVariantMedia = unstable_cache(
   ["variant-media"],
   { revalidate: 3600, tags: [VARIANT_MEDIA_TAG] }
 );
+
+// One column of the /compare page. Cached per VARIANT, not per list: the list comes from a public
+// URL, so per-list keys would be unbounded, while the same variant shows up in many lists.
+// Tagged "catalog" (name/price/visibility) + variant media (photos/specs) — both purged by bump/bumpProduct.
+const getCompareVariant = unstable_cache(
+  async (variantId: string): Promise<CompareVariant | null> => {
+    const { data, error } = await supabaseAdmin()
+      .from("variants")
+      .select(`${VARIANT_SELECT_WITH_SPECS}, product:product_id ( id, slug, model, catalog, visible )`)
+      .eq("id", variantId)
+      .maybeSingle();
+    if (isMissingColumn(error)) return null; // product_slug.sql hasn't been applied yet
+    if (error) throw error;
+    type Row = VariantRow & {
+      product: { id: string; slug: string | null; model: string | null; catalog: string | null; visible: boolean | null } | null;
+    };
+    const row = data as unknown as Row | null;
+    // A hidden variant or product is not on the storefront — an old shared link must not resurrect it.
+    if (!row?.product?.visible || row.visible === false) return null;
+
+    const pool = specPool();
+    const { specs, imagesCompressed, ...variant } = toDetailVariant(row, pool);
+    return {
+      ...variant,
+      imagesCompressed: imagesCompressed ?? variant.images.map(compressedUrl),
+      specifications: pool.sets[specs],
+      productId: row.product.id,
+      slug: row.product.slug,
+      model: row.product.model || "Без назви",
+      catalog: row.product.catalog || "",
+    };
+  },
+  ["compare-variant"],
+  { revalidate: 3600, tags: ["catalog", VARIANT_MEDIA_TAG] }
+);
+
+// The variants of a comparison, in the given order. The ids come straight from the URL (parseCompareIds
+// has already capped and validated them); anything missing or hidden is skipped. Comparing makes sense
+// within one catalog only, and the URL can be hand-edited — so the first variant's catalog wins.
+export async function getCompareVariants(variantIds: string[]): Promise<CompareVariant[]> {
+  const found = (await Promise.all(variantIds.map((id) => getCompareVariant(id)))).filter(
+    (v): v is CompareVariant => !!v
+  );
+  const catalog = found[0]?.catalog;
+  return found.filter((v) => v.catalog === catalog);
+}
 
 // cache() wraps it so generateMetadata + the page share one call within a request.
 export const getProductById = cache(async (idOrSlug: string): Promise<ProductDetail | null> => {

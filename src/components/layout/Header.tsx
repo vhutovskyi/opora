@@ -3,11 +3,13 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { MenuIcon, CartIcon, OporaLogo } from "../ui/Icons";
+import { MenuIcon, CartIcon, CompareIcon, OporaLogo } from "../ui/Icons";
 import HeaderSearch from "./HeaderSearch";
 import MenuDrawer from "./MenuDrawer";
 import CartDrawer from "./CartDrawer";
 import { useCartStore } from "@/store/cartStore";
+import { useCompareStore } from "@/store/compareStore";
+import { compareHref } from "@/lib/compare";
 import { buildSubcategoryTrees, type SubcategoryNode, type SubcategoryOptionRow } from "@/lib/supabase/subcategoryTree";
 import { catalogHref, subRef } from "@/lib/utils";
 
@@ -79,6 +81,9 @@ export default function Header({
   // The cart open state is global (so that CartToast can open it)
   const openCart = useCartStore((state) => state.openCart);
 
+  // The comparison list (variant ids) — the link carries them, so /compare opens straight on them.
+  const compareItems = useCompareStore((state) => state.items);
+
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
@@ -144,6 +149,18 @@ export default function Header({
 
           <div className="flex items-center gap-1 -mr-2 justify-self-end">
             <HeaderSearch />
+            <Link
+              href={compareHref(mounted ? compareItems.map((i) => i.id) : [])}
+              aria-label="Порівняння товарів"
+              className="hover:opacity-70 transition-opacity p-2 relative"
+            >
+              <CompareIcon className="w-6 h-6" />
+              {mounted && compareItems.length > 0 && (
+                <span className="absolute top-1 right-0 bg-opora-brown text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                  {compareItems.length}
+                </span>
+              )}
+            </Link>
             <button
               onClick={openCart}
               aria-label="Відкрити кошик"
