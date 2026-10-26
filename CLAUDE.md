@@ -60,6 +60,10 @@ No test suite. `next.config.ts` sets `typescript.ignoreBuildErrors: true`, so TS
 ### Path alias
 `@/*` → `src/*` (see `tsconfig.json`).
 
+### Mobile styling (required)
+**Every new component and page must be styled for mobile**, storefront and admin alike — not desktop-only with mobile left for later. Write Tailwind **mobile-first** like the rest of the codebase: unprefixed classes are the phone layout, `md:` (the main breakpoint here) and `lg:` layer the desktop layout on top. Check the result at ~375px width (no horizontal overflow, tap targets ≥ 44px, text readable without zoom, modals/drawers fit the viewport) before calling the work done.
+
+
 ## Deployment & environment
 
 Deployed as a Cloudflare Worker via `@opennextjs/cloudflare` (`wrangler.jsonc`, `open-next.config.ts`). Bindings (`ASSETS`, `IMAGES`, `WORKER_SELF_REFERENCE`) are typed into the committed `cloudflare-env.d.ts` via `npm run cf-typegen`.
