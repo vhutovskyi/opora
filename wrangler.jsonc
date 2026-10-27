@@ -8,6 +8,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
+	"account_id": "1557d0be8ea6dc9efd60454b8cbc380a",
 	"name": "opora",
 	"main": ".open-next/worker.js",
 	"compatibility_date": "2026-05-18",
