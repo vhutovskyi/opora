@@ -36,6 +36,9 @@ export function toCardVariations(detail: ProductDetail): CatalogProductDetails["
       allHexes: v.options.map((o) => ({ hex: hexColor(o.value), name: o.name })),
       images: v.images.slice(0, 2),
       imagesCompressed: v.imagesCompressed.slice(0, 2),
+      // Without these the card fell back to the product's "від" price and never showed the sale.
+      price: String(v.price),
+      discountedPrice: v.discountedPrice != null ? String(v.discountedPrice) : undefined,
     });
   }
   return variations;

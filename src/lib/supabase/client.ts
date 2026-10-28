@@ -21,7 +21,7 @@ export function isMissingTable(error: { code?: string } | null): boolean {
   return error?.code === "PGRST205" || error?.code === "42P01";
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const SLUG_RE = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/;
 
 // "The column doesn't exist yet" — the same case as isMissingTable, but for ALTER TABLE

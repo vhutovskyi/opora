@@ -7,7 +7,7 @@ import { Dialog } from "radix-ui";
 import Image from "@/components/ui/OptimizedImage";
 import { AccessoryLink, OptionGroup, Variant, hexColor, isHexColor, optKind } from "./types";
 import { findVariantForOption, getOptionGroups, isOptionAvailable } from "./variantSelection";
-import { productHref } from "@/lib/utils";
+import { effectivePrice, productHref } from "@/lib/utils";
 
 interface AccessoryModalProps {
   link: AccessoryLink;
@@ -48,7 +48,8 @@ export default function AccessoryModal({
     : activeVariant?.images ?? [];
   // The full-size photo for the lightbox — the original, if there is one under the same index.
   const fullImage = zoomIdx === null ? null : activeVariant?.images?.[zoomIdx] ?? images[zoomIdx];
-  const price = activeVariant?.price || link.product.minPrice;
+  // The effective (sale) price — what the BuyBox totals and the cart charge for this accessory.
+  const price = (activeVariant && effectivePrice(activeVariant)) || link.product.minPrice;
 
   const handleOptionSelect = (key: string, value: string) => {
     const match = findVariantForOption(variants, activeVariant, key, value);

@@ -18,8 +18,14 @@ export async function GET() {
 
   const items = products
     .map((p) => {
-      const image = p.variations?.[0]?.images?.[0];
-      if (!image || !p.price) return ""; // Google rejects an item without a price/photo
+      // The first variation is the product page's default variant (the one <g:link> opens), so its
+      // price is the one Google checks the landing page against: the regular price in g:price, the
+      // discount in g:sale_price — Google's own convention, it shows the strike-through itself.
+      const first = p.variations?.[0];
+      const image = first?.images?.[0];
+      const price = Number(first?.price || 0) || p.price;
+      const salePrice = Number(first?.discountedPrice || 0);
+      if (!image || !price) return ""; // Google rejects an item without a price/photo
       return `<item>
 <g:id>${esc(p.id)}</g:id>
 <g:title>${esc(p.name)}</g:title>
@@ -28,8 +34,8 @@ export async function GET() {
 <g:image_link>${esc(abs(image))}</g:image_link>
 <g:availability>in_stock</g:availability>
 <g:condition>new</g:condition>
-<g:price>${p.price} UAH</g:price>
-<g:brand>${esc(SITE_NAME)}</g:brand>
+<g:price>${price} UAH</g:price>
+${salePrice ? `<g:sale_price>${salePrice} UAH</g:sale_price>\n` : ""}<g:brand>${esc(SITE_NAME)}</g:brand>
 <g:identifier_exists>no</g:identifier_exists>
 </item>`;
     })

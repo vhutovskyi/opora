@@ -1,12 +1,12 @@
 import { ClientRequest } from "@/lib";
-import { insertRequest } from "@/lib/supabase/requests";
+import { insertRequest, repriceCartItems } from "@/lib/supabase/requests";
 import { formatOrderMessage, DELIVERY_LABELS } from "@/lib/telegram/formatOrderMessage";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as ClientRequest;
-    const { name, phoneNumber, orders, deliveryMethod, deliveryCity, deliveryWarehouse } = body;
+    const { name, phoneNumber, deliveryMethod, deliveryCity, deliveryWarehouse } = body;
     const deliveryLabel = deliveryMethod ? DELIVERY_LABELS[deliveryMethod] : "";
 
     // Basic validation
@@ -16,6 +16,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Prices come from the DB, not from the browser's (possibly days-old, pre-discount) cart.
+    const orders = body.orders?.length ? await repriceCartItems(body.orders) : body.orders;
 
     // The order number comes from the client; if it doesn't — we generate it here as a fallback
     const orderNumber = body.orderNumber || Math.floor(100000 + Math.random() * 900000).toString();

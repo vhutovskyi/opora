@@ -11,7 +11,7 @@ import Reviews from "@/components/blocks/Reviews";
 import LongDescriptionRenderer from "@/components/longDescription/LongDescriptionRenderer";
 import RecentlyViewed from "@/components/blocks/RecentlyViewed";
 import { CatalogProductDetails } from "@/lib";
-import { productHref } from "@/lib/utils";
+import { effectivePrice, productHref } from "@/lib/utils";
 import type { Model3D } from "@/lib/models3d";
 import { accessoryComboKey, comboKeyIgnoringQty } from "@/lib/accessoryCombo";
 import { imageGroupKey } from "@/lib/supabase/imageGroups";
@@ -178,7 +178,7 @@ export default function ProductDetailClient({
       productId: product.id,
       title: product.model || product.name,
       sku: activeVariant.sku,
-      price: activeVariant.discountedPrice || activeVariant.price || product.minPrice,
+      price: effectivePrice(activeVariant) || product.minPrice,
       image: activeMedia?.images[0] || '/placeholder.png',
       quantity: qty,
       options: activeVariant.options.map((o) => ({ name: o.name, value: o.value })),
@@ -198,7 +198,7 @@ export default function ProductDetailClient({
         productId: link.product.id,
         title: link.product.model,
         sku: accVariant.sku,
-        price: accVariant.discountedPrice || accVariant.price || link.product.minPrice,
+        price: effectivePrice(accVariant) || link.product.minPrice,
         image: accVariant.images[0] || '/placeholder.png',
         quantity: accessoryQty[link.id] ?? 1,
         options: accVariant.options.map((o) => ({ name: o.name, value: o.value })),
@@ -209,7 +209,7 @@ export default function ProductDetailClient({
     trackEvent("Додано до кошика", {
       product: product.model || product.name,
       sku: activeVariant.sku,
-      price: activeVariant.price || product.minPrice,
+      price: effectivePrice(activeVariant) || product.minPrice,
       qty,
     });
     setToast({ message: `Додано до кошика: ${product.model || product.name} (${qty} шт.)`, options: activeVariant.options });
@@ -293,7 +293,8 @@ export default function ProductDetailClient({
               : link.product.variants;
           })()
         : link.product.variants;
-      const picked = pool.reduce<Variant | null>((min, v) => (!min || v.price < min.price ? v : min), null);
+      // Cheapest by what the customer actually pays — a discounted variant can undercut a cheaper list price.
+      const picked = pool.reduce<Variant | null>((min, v) => (!min || effectivePrice(v) < effectivePrice(min) ? v : min), null);
       return { ...prev, [linkId]: picked?.id ?? null };
     });
     setAccessoryQty((prev) => ({ ...prev, [linkId]: 1 }));

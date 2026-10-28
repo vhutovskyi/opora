@@ -6,6 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useQuery } from "@tanstack/react-query";
 import { SearchIcon, CloseIcon } from "../ui/Icons";
+import PriceLabel from "../ui/PriceLabel";
 import type { SearchResult } from "@/lib/supabase/search";
 
 const DEBOUNCE_MS = 350;
@@ -130,7 +131,7 @@ export default function HeaderSearch() {
                       )}
                       <p className="text-sm font-medium leading-snug truncate">{r.name}</p>
                     </div>
-                    <span className="shrink-0 text-sm font-medium">{r.price.toLocaleString("uk-UA")} ₴</span>
+                    <PriceLabel price={r.price} discountedPrice={r.discountedPrice} />
                   </Link>
                 ))
               )}

@@ -59,6 +59,13 @@ export function toHue(hex?: string): number {
 // The canonical segment of a product address: the slug, if it was set in the editor (product_slug.sql),
 // otherwise the uuid. One helper for every link — the site, the admin panel and the sitemap — so the slug
 // doesn't get "lost" on one particular path. The lookup accepts both, so old links stay alive.
+// What the customer pays for a variant: the sale price when one is set, otherwise the regular one.
+// The server only sends discountedPrice when it is lower than price (variantPricing in
+// lib/supabase/variantRules.ts), so a truthy check is enough here. Every price that is charged,
+// totalled or reported goes through this — the regular price is only for the struck-through label.
+export const effectivePrice = (v: { price?: number | null; discountedPrice?: number | null }) =>
+  v.discountedPrice || v.price || 0;
+
 export const productRef = (p: { id: string; slug?: string | null }) => p.slug || p.id;
 export const productHref = (p: { id: string; slug?: string | null }) => `/catalog/${productRef(p)}`;
 

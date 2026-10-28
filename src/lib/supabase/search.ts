@@ -1,11 +1,15 @@
-import { BOOL_YES, optionValueRank } from "@/lib/constants";
+import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "./client";
+import { priceRange, variantPricing, visibleSorted, type PricedVariant, type StorefrontVariant } from "./variantRules";
 import { productHref } from "@/lib/utils";
 
 export type SearchResult = {
   id: string;
   name: string;
+  // Exactly what the catalog card shows with no filter: the DEFAULT variant's regular price, and its
+  // sale price when it has one (then rendered as struck-through price + red sale, PriceLabel).
   price: number;
+  discountedPrice: number | null;
   href: string;
   image: string;
   catalog: string;
@@ -39,26 +43,36 @@ export async function searchProducts(query: string): Promise<SearchResult[]> {
 
   const db = supabaseAdmin();
 
-  const [byText, byOption, bySpec] = await Promise.all([
-    // Full-text over the GIN index; config must be the same 'simple' as in the column.
+  // Visibility as in the catalog (fetchCatalogBase + variantRules.ts): a visible product with at least
+  // one visible variant, and an option/spec counts only when a VISIBLE variant carries it. It is applied
+  // inside each query, not after: the option/spec queries used to ignore visibility altogether, so a
+  // hidden product (or a visible one matched only through a hidden variant) could take one of the
+  // LIMIT slots and then render nothing — getSearchCard drops it, leaving the list short.
+  // All three select PRODUCTS through an inner join on variants (one variant per product is enough
+  // to prove the match), so `limit` counts products. The option/spec queries used to return variant
+  // rows capped at 300 — a single 320-variant bed could fill the cap on its own ("горіх" matches 60
+  // visible products by option, the capped rows held 14). (`variants.visible` is NOT NULL, so eq true
+  // is the same rule as isStorefrontVisible.)
+  const visibleProducts = (select: string) =>
     db
       .from("products")
-      .select("id")
+      .select(select)
       .eq("visible", true)
-      .textSearch("search_tsv", tsq, { config: "simple" })
-      .limit(50),
+      .eq("variants.visible", true)
+      .limit(1, { referencedTable: "variants" })
+      .limit(LIMIT);
+
+  const [byText, byOption, bySpec] = await Promise.all([
+    // Full-text over the GIN index; config must be the same 'simple' as in the column.
+    visibleProducts("id, variants!inner ( id )").textSearch("search_tsv", tsq, { config: "simple" }),
     // options.name is "Колір оббивки: Чорний", and for colours value is a hex,
     // so the readable text of an option lives precisely in name.
-    db
-      .from("variants")
-      .select("product_id, variant_options!inner ( options!inner ( name ) )")
-      .ilike("variant_options.options.name", pat)
-      .limit(300),
-    db
-      .from("variants")
-      .select("product_id, variant_specs!inner ( value )")
-      .ilike("variant_specs.value", pat)
-      .limit(300),
+    visibleProducts("id, variants!inner ( variant_options!inner ( options!inner ( name ) ) )")
+      .ilike("variants.variant_options.options.name", pat)
+      .limit(1, { referencedTable: "variants.variant_options" }),
+    visibleProducts("id, variants!inner ( variant_specs!inner ( value ) )")
+      .ilike("variants.variant_specs.value", pat)
+      .limit(1, { referencedTable: "variants.variant_specs" }),
   ]);
 
   // We don't swallow an error from the main (full-text) query: otherwise a missing search_tsv column
@@ -66,66 +80,85 @@ export async function searchProducts(query: string): Promise<SearchResult[]> {
   if (byText.error) throw byText.error;
 
   // Matches in the name/description come first, then the options and specs.
-  const ids = new Set<string>((byText.data ?? []).map((r) => r.id as string));
-  for (const r of [...(byOption.data ?? []), ...(bySpec.data ?? [])]) {
+  const rows = (r: { data: unknown }) => (r.data ?? []) as { id: string }[];
+  const ids = new Set<string>(rows(byText).map((r) => r.id));
+  for (const r of [...rows(byOption), ...rows(bySpec)]) {
     if (ids.size >= LIMIT) break;
-    if (r.product_id) ids.add(r.product_id as string);
+    ids.add(r.id);
   }
   const top = [...ids].slice(0, LIMIT);
   if (!top.length) return [];
 
-  const { data, error } = await db
-    .from("products")
-    .select(
-      `id, slug, model, min_price, catalog,
-       variants ( sort_order, variant_images ( images ( url_compressed, url ) ), variant_options ( options ( value ) ) )`
-    )
-    .in("id", top)
-    .eq("visible", true)
-    .eq("variants.visible", true)
-    .order("sort_order", { referencedTable: "variants", ascending: true })
-    // The first few variants — so they can be sorted the same way as a catalog card.
-    .limit(6, { referencedTable: "variants" })
-    .order("sort_order", { referencedTable: "variants.variant_images" })
-    .limit(1, { referencedTable: "variants.variant_images" });
-  if (error) throw error;
-
-  type SearchVariantRow = {
-    sort_order: number | null;
-    variant_images: { images: { url_compressed: string | null; url: string } | null }[] | null;
-    variant_options: { options: { value: string | null } | null }[] | null;
-  };
-  type Row = {
-    id: string;
-    slug: string | null;
-    model: string | null;
-    min_price: number | null;
-    catalog: string | null;
-    variants: SearchVariantRow[] | null;
-  };
-  const byId = new Map((data as unknown as Row[]).map((p) => [p.id, p]));
-
-  // The same order as in the catalog: "Так" checkboxes to the end, priority values to the front.
-  const boolYes = (v: SearchVariantRow) =>
-    (v.variant_options || []).some((vo) => vo.options?.value === BOOL_YES) ? 1 : 0;
-  const rank = (v: SearchVariantRow) =>
-    Math.min(0, ...(v.variant_options || []).map((vo) => optionValueRank(vo.options?.value || "")));
-
-  return top
-    .map((id) => byId.get(id))
-    .filter((p): p is Row => !!p)
-    .map((p) => {
-      const first = (p.variants || [])
-        .slice()
-        .sort((a, b) => boolYes(a) - boolYes(b) || rank(a) - rank(b) || (a.sort_order || 0) - (b.sort_order || 0))[0];
-      const img = first?.variant_images?.[0]?.images;
-      return {
-        id: p.id,
-        name: p.model || "Без назви",
-        price: Number(p.min_price || 0),
-        href: productHref(p),
-        image: img?.url_compressed || img?.url || "",
-        catalog: p.catalog || "",
-      };
-    });
+  // One small cached card per product, fetched in parallel — see getSearchCard.
+  const cards = await Promise.all(top.map((id) => getSearchCard(id)));
+  return cards.filter((c): c is SearchResult => !!c);
 }
+
+type SearchVariantRow = StorefrontVariant & PricedVariant & { id: string };
+
+// The search result for ONE product: its default variant's photo and its "від" price, picked by the
+// same rules as the catalog card and the product page (variantRules.ts). Those rules need ALL
+// visible variants — the first few by sort_order could all be "Так" checkboxes or miss the cheapest
+// one — and a bed has 320 of them: reading every variant on every keystroke was 1600 rows / 438KB
+// for "ліжко" (5 such beds), ~650ms per search. So it is cached per PRODUCT (like getCompareVariant
+// per variant): the query text is unbounded, the product set is not, and one product shows up in
+// many queries. ~300 bytes per entry; tagged "catalog", which every price / visibility / photo edit purges.
+const getSearchCard = unstable_cache(
+  async (productId: string): Promise<SearchResult | null> => {
+    const db = supabaseAdmin();
+    // Sort keys + prices, but no photos: the photo of the one chosen variant comes in a second,
+    // targeted query instead of one photo row per variant.
+    const { data, error } = await db
+      .from("products")
+      .select(
+        `id, slug, model, min_price, catalog,
+         variants ( id, price, discounted_price, visible, sort_order, variant_options ( options ( value ) ) )`
+      )
+      .eq("id", productId)
+      .eq("visible", true)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+
+    const p = data as unknown as {
+      id: string;
+      slug: string | null;
+      model: string | null;
+      min_price: number | null;
+      catalog: string | null;
+      variants: SearchVariantRow[] | null;
+    };
+    const visible = visibleSorted(p.variants);
+    const first = visible[0];
+    // No visible variant → not on the storefront (the catalog drops such a product the same way).
+    if (!first) return null;
+
+    const { data: img, error: imgError } = await db
+      .from("variant_images")
+      .select("images ( url, url_compressed )")
+      .eq("variant_id", first.id)
+      .order("sort_order")
+      .limit(1)
+      .maybeSingle();
+    if (imgError) throw imgError;
+    const row = img as unknown as { images: { url: string; url_compressed: string | null } | null } | null;
+    const image = row?.images?.url_compressed || row?.images?.url || "";
+
+    // The default variant's own price, like the catalog card (ProductCard: activeVariation.price,
+    // falling back to the product's "від" price only when the variant carries none) — so the price
+    // belongs to the photo next to it. It used to be the cheapest variant across the product, which
+    // disagreed with the card on 18 of 82 products (Стіл Edgar: 7600 on the card, 4700 here).
+    const { price, discountedPrice } = variantPricing(first);
+    return {
+      id: p.id,
+      name: p.model || "Без назви",
+      price: price || priceRange(visible, p.min_price).lo,
+      discountedPrice: price ? discountedPrice : null,
+      href: productHref(p),
+      image,
+      catalog: p.catalog || "",
+    };
+  },
+  ["search-card-v2"],
+  { revalidate: 3600, tags: ["catalog"] }
+);

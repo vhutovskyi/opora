@@ -1,9 +1,9 @@
 import { cache } from "react";
 import { unstable_cache } from "next/cache";
-import { BOOL_YES, optionValueRank } from "@/lib/constants";
 import { collectSnippetIds, resolveSnippets, type LongDescriptionBlock } from "@/lib/longDescription/types";
 import { supabaseAdmin, isMissingTable, isMissingColumn, byIdOrSlug } from "./client";
 import { imageGroupKey } from "./imageGroups";
+import { isStorefrontVisible, priceRange, variantPricing, visibleSorted } from "./variantRules";
 import { productHref } from "@/lib/utils";
 import {
   CompareVariant,
@@ -202,14 +202,13 @@ type PackedDetail = Omit<ProductDetail, "variants" | "accessories" | "accessoryC
 function toDetailVariant(v: VariantRow, specs: SpecPool): PackedVariant {
   const { images, imagesCompressed } = variantImages(v);
   const derivable = imagesCompressed.every((url, i) => url === compressedUrl(images[i]));
-  const price = Number(v.price || 0);
-  const discounted = Number(v.discounted_price || 0);
+  const { price, discountedPrice } = variantPricing(v);
   return {
     id: v.id,
     name: v.name || "",
     sku: v.sku || "",
     price,
-    discountedPrice: discounted > 0 && discounted < price ? discounted : null,
+    discountedPrice,
     inStock: !!v.in_stock,
     images,
     imagesCompressed: derivable ? null : imagesCompressed,
@@ -242,8 +241,7 @@ function unpackDetail({ specSets, variants, accessories, accessoryComboPhotos, .
 // `imagesCompressed ?? images`, so the second array would just double the payload (same trick as
 // fetchCatalogBase). Postgres already capped variant_images at 2, the slice is belt-and-braces.
 function toCardVariation(v: CardVariantRow): VariationImage {
-  const price = Number(v.price || 0);
-  const discounted = Number(v.discounted_price || 0);
+  const { price, discountedPrice } = variantPricing(v);
   return {
     id: v.id,
     allHexes: variantOptions(v).map((o) => ({ hex: o.value || "", name: o.name || "" })),
@@ -252,7 +250,7 @@ function toCardVariation(v: CardVariantRow): VariationImage {
       .map((r) => r.images!.url_compressed || r.images!.url)
       .slice(0, 2),
     price: String(price),
-    discountedPrice: discounted > 0 && discounted < price ? String(discounted) : undefined,
+    discountedPrice: discountedPrice != null ? String(discountedPrice) : undefined,
   };
 }
 
@@ -263,38 +261,6 @@ function parseGalleryLayout(raw: string | null | undefined): number[] {
     .map((s) => parseInt(s.trim(), 10))
     .filter((n) => n >= 1 && n <= 4);
 }
-
-// Checkbox options ("З білими ніжками" and the like) are UNTICKED by default: variants with the value "Так"
-// are sorted after the rest, and only then by sort_order. The first variant of the list is the default on the
-// product page (and it is its photos that go as a prop), so it is always "Ні".
-// Structurally typed, not VariantRow: the card select (CARD_VARIANT_SELECT) fetches fewer columns,
-// and these three only ever look at the options / order anyway.
-type SortableVariant = {
-  visible: boolean | null;
-  sort_order: number | null;
-  variant_options: { options: OptionRow | null }[] | null;
-};
-
-const hasBoolYes = (v: Pick<SortableVariant, "variant_options">) =>
-  (v.variant_options || []).some((vo) => vo.options?.value === BOOL_YES) ? 1 : 0;
-
-// Priority option values (OPTION_VALUE_ORDER, e.g. "Щит") — to the front, but AFTER the checkboxes,
-// so the default variant keeps its checkboxes unticked. A sum (not a minimum) over all of the variant's axes —
-// so that priority on one axis (Матеріал: Щит) doesn't "drown out" priority on another (Фурнітура: Стандарт).
-const valueRank = (v: Pick<SortableVariant, "variant_options">) =>
-  (v.variant_options || []).reduce((sum, vo) => sum + optionValueRank(vo.options?.value || ""), 0);
-
-// Storefront-visible variants only, in sort order. Hidden ones (visible=false, e.g. beds config
-// variations not curated for the selector) stay in the DB but never reach the client.
-// ponytail: the sort keys are computed ONCE per variant, not inside the comparator. A bed has ~1000
-// variants → ~10k comparisons, and each one re-scanned the options of both sides (hasBoolYes +
-// valueRank), i.e. ~160k optionValueRank calls per cache miss. Now it is ~2k. Same order as before.
-const visibleSorted = <T extends SortableVariant>(rows: T[] | null): T[] =>
-  (rows || [])
-    .filter((v) => v.visible !== false)
-    .map((v) => ({ v, bool: hasBoolYes(v), rank: valueRank(v), order: v.sort_order || 0 }))
-    .sort((a, b) => a.bool - b.bool || a.rank - b.rank || a.order - b.order)
-    .map((d) => d.v);
 
 // Cards only (top products / "buy with" strips), so it fetches card-shaped data: 2 photos per variant
 // counted by Postgres, then ONE variant per "look" (imageGroupKey — size/lamels don't change the
@@ -327,7 +293,8 @@ export async function getMultipleProductsWithVariations(productIds: string[]): P
       // unticked, priority materials first) — the same order the catalog card shows.
       const seenLooks = new Set<string>();
       const variations: VariationImage[] = [];
-      for (const v of visibleSorted(product!.variants)) {
+      const visible = visibleSorted(product!.variants);
+      for (const v of visible) {
         const look = imageGroupKey(variantOptions(v).map((o) => o.name || "").filter(Boolean));
         if (seenLooks.has(look)) continue;
         seenLooks.add(look);
@@ -338,7 +305,7 @@ export async function getMultipleProductsWithVariations(productIds: string[]): P
         slug: product!.slug,
         name: product!.model || "Без назви",
         href: productHref(product!),
-        price: Number(product!.min_price || 0),
+        price: priceRange(visible, product!.min_price).lo,
         variations,
         catalog: product!.catalog,
       };
@@ -431,24 +398,28 @@ const fetchProductDetail = (productId: string) =>
     fetchComboPhotos(productId),
   ]);
 
-  const variants = visibleSorted(p.variants).map((v) => toDetailVariant(v, specs));
+  const visible = visibleSorted(p.variants);
+  const variants = visible.map((v) => toDetailVariant(v, specs));
 
   const accessories: PackedAccessory[] = (p.product_accessories || [])
     .slice()
     .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
     .filter((a) => a.accessory)
-    .map((a) => ({
-      id: a.id,
-      product: {
-        id: a.accessory!.id,
-        slug: a.accessory!.slug,
-        model: a.accessory!.model || "",
-        minPrice: Number(a.accessory!.min_price || 0),
-        comboAxis: a.accessory!.combo_axis,
-        variants: visibleSorted(a.accessory!.variants).map((v) => toDetailVariant(v, specs)),
-      },
-      maxQty: Math.max(1, a.max_qty || 1),
-    }));
+    .map((a) => {
+      const accVisible = visibleSorted(a.accessory!.variants);
+      return {
+        id: a.id,
+        product: {
+          id: a.accessory!.id,
+          slug: a.accessory!.slug,
+          model: a.accessory!.model || "",
+          minPrice: priceRange(accVisible, a.accessory!.min_price).lo,
+          comboAxis: a.accessory!.combo_axis,
+          variants: accVisible.map((v) => toDetailVariant(v, specs)),
+        },
+        maxQty: Math.max(1, a.max_qty || 1),
+      };
+    });
 
   return {
     specSets: specs.sets,
@@ -463,7 +434,8 @@ const fetchProductDetail = (productId: string) =>
     longDescription,
     assemblyVideoUrl: p.assembly_video_url || "",
     assemblyPdfUrl: p.assembly_pdf_url || "",
-    minPrice: Number(p.min_price || 0),
+    // From visible variants' effective prices — the same "від" the catalog card and search show.
+    minPrice: priceRange(visible, p.min_price).lo,
     galleryLayout: parseGalleryLayout(p.gallery_layout),
     variants,
     accessories,
@@ -518,7 +490,7 @@ const getCompareVariant = unstable_cache(
     };
     const row = data as unknown as Row | null;
     // A hidden variant or product is not on the storefront — an old shared link must not resurrect it.
-    if (!row?.product?.visible || row.visible === false) return null;
+    if (!row?.product?.visible || !isStorefrontVisible(row)) return null;
 
     const pool = specPool();
     const { specs, imagesCompressed, ...variant } = toDetailVariant(row, pool);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import Drawer from "./Drawer";
@@ -17,6 +17,21 @@ export default function CartDrawer() {
   const updateQuantity = useCartStore((state) => state.updateQuantity);
   const getTotalPrice = useCartStore((state) => state.getTotalPrice);
   const clearCart = useCartStore((state) => state.clearCart);
+  const syncPrices = useCartStore((state) => state.syncPrices);
+
+  // The cart is persisted in localStorage, so its prices can predate a discount (or a price change).
+  // Refresh them whenever the drawer opens — the server prices the order the same way (/api/requests),
+  // so the total shown here is the total the order arrives with.
+  const cartIdsKey = cartItems.map((i) => i.id).sort().join(",");
+  useEffect(() => {
+    if (!isCartOpen || !cartIdsKey) return;
+    const controller = new AbortController();
+    fetch(`/api/cart/prices?ids=${cartIdsKey}`, { signal: controller.signal })
+      .then((r) => (r.ok ? (r.json() as Promise<Record<string, number>>) : null))
+      .then((prices) => prices && syncPrices(prices))
+      .catch(() => {}); // aborted / offline — keep the stored prices, the server reprices the order anyway
+    return () => controller.abort();
+  }, [isCartOpen, cartIdsKey, syncPrices]);
 
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'form' | 'success'>('cart');
   const [formData, setFormData] = useState({ name: '', phone: '+380' });

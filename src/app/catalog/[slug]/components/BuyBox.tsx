@@ -5,6 +5,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { BOOL_NO, BOOL_YES } from "@/lib/constants";
 import type { Model3D } from "@/lib/models3d";
+import { effectivePrice } from "@/lib/utils";
 import CompareButton from "./CompareButton";
 import { AccessoryLink, Option, OptionGroup, Product, VariantSummary, chipLabel, hexColor, isBoolGroup, isHexColor, isSelectGroup, optKind } from "./types";
 
@@ -103,9 +104,6 @@ export default function BuyBox({
   const short = buildShortDescription(product.description);
   const [infoKey, setInfoKey] = useState<string | null>(null);
   const [show3d, setShow3d] = useState(false);
-
-  // The price actually charged for a variant — the sale price when one is set, otherwise the plain price.
-  const effectivePrice = (v: VariantSummary | null | undefined) => (v?.discountedPrice || v?.price) ?? 0;
 
   // Total: variant × quantity + the selected accessories (each accessory × its own quantity)
   const accessoryTotal = accessories.reduce((sum, link) => {

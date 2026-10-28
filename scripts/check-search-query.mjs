@@ -4,11 +4,12 @@
 // Run: node scripts/check-search-query.mjs   (esbuild is already in the project: TS is bundled into tmp)
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { resolve } from 'node:path';
 
-const out = join(tmpdir(), 'opora-search.check.mjs');
-execFileSync('node_modules/.bin/esbuild', ['src/lib/supabase/search.ts', '--bundle', '--format=esm', '--platform=node', `--outfile=${out}`], {
+// next stays external (search.ts imports next/cache, which can't be bundled), so the CJS bundle is written
+// inside the project — that is where `require('next/cache')` resolves from node_modules.
+const out = resolve('node_modules/.cache/opora-search.check.cjs');
+execFileSync('node_modules/.bin/esbuild', ['src/lib/supabase/search.ts', '--bundle', '--format=cjs', '--platform=node', '--external:next', `--outfile=${out}`], {
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 const { tsQuery, likePattern } = await import(out);

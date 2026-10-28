@@ -52,11 +52,12 @@ export default function ProductCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedColors]);
 
-  // Price range check — same field (variant.price, not discountedPrice) the catalog filter itself uses (catalog.ts).
+  // Price range check — the effective (sale-aware) price, the same one the catalog filter itself uses
+  // (variantPricing in lib/supabase/variantRules.ts) and the one the card displays and the cart charges.
   const hasPriceFilter = priceMin != null || priceMax != null;
   const matchesPrice = (variation: VariationImage) => {
     if (!hasPriceFilter) return true;
-    const price = Number(variation.price || 0);
+    const price = Number(variation.discountedPrice || variation.price || 0);
     if (priceMin != null && price < priceMin) return false;
     if (priceMax != null && price > priceMax) return false;
     return true;

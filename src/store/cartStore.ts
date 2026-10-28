@@ -18,6 +18,7 @@ interface CartState {
   removeItem: (id: string) => void;
   updateQuantity: (id: string, quantity: number) => void;
   clearCart: () => void;
+  syncPrices: (prices: Record<string, number>) => void;
   // UI: the open state of the side cart (managed globally so that
   // any component — CartToast, for instance — can open the cart)
   isCartOpen: boolean;
@@ -43,11 +44,12 @@ export const useCartStore = create<CartState>()(
           const existingItem = state.items.find((item) => item.id === newItem.id);
 
           if (existingItem) {
-            // If it exists, just update the quantity
+            // If it exists, update the quantity — and take the newer price: the line may have been added
+            // (and persisted) before a discount was set, and the page just offered the current one.
             return {
               items: state.items.map((item) =>
                 item.id === newItem.id
-                  ? { ...item, quantity: item.quantity + newItem.quantity }
+                  ? { ...item, price: newItem.price, quantity: item.quantity + newItem.quantity }
                   : item
               ),
             };
@@ -73,6 +75,16 @@ export const useCartStore = create<CartState>()(
       },
 
       clearCart: () => set({ items: [] }),
+
+      // Current prices from /api/cart/prices (variant id → sale-aware price). Lines missing from the
+      // map keep their price; the state is untouched when nothing changed, so subscribers don't re-render.
+      syncPrices: (prices) => {
+        set((state) => {
+          const changed = state.items.some((item) => prices[item.id] != null && prices[item.id] !== item.price);
+          if (!changed) return state;
+          return { items: state.items.map((item) => (prices[item.id] != null ? { ...item, price: prices[item.id] } : item)) };
+        });
+      },
 
       getTotalPrice: () => {
         return get().items.reduce((total, item) => total + item.price * item.quantity, 0);

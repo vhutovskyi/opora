@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import Image from "next/image";
 import { SearchIcon } from "@/components/ui/Icons";
+import PriceLabel from "@/components/ui/PriceLabel";
 import type { SearchResult } from "@/lib/supabase/search";
 
 const SEARCH_DEBOUNCE_MS = 350;
@@ -62,7 +63,7 @@ export function FilterSearch() {
                   {r.catalog && <p className="text-[10px] uppercase tracking-wide text-opora-brown/50">{r.catalog}</p>}
                   <p className="text-sm font-medium leading-snug truncate">{r.name}</p>
                 </div>
-                <span className="shrink-0 text-sm font-medium">{r.price.toLocaleString("uk-UA")} ₴</span>
+                <PriceLabel price={r.price} discountedPrice={r.discountedPrice} />
               </Link>
             ))
           )}

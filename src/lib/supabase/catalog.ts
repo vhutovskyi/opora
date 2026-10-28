@@ -1,7 +1,7 @@
 import { unstable_cache } from "next/cache";
-import { BOOL_YES, optionValueRank } from "@/lib/constants";
 import { supabaseAdmin } from "./client";
 import { imageGroupKey } from "./imageGroups";
+import { isStorefrontVisible, priceRange, variantPricing, visibleSorted } from "./variantRules";
 import { productHref, productRef } from "@/lib/utils";
 import { resolveSubRefs, type SubcategoryOptionRow } from "./subcategoryTree";
 import {
@@ -19,6 +19,7 @@ type VariantRow = {
   id: string;
   price: number | null;
   discounted_price: number | null;
+  visible: boolean | null;
   sort_order: number | null;
   variant_images: { sort_order: number | null; images: ImageRow | null }[] | null;
   variant_options: { options: OptionRow | null }[] | null;
@@ -32,8 +33,9 @@ type CatalogRow = {
   catalog: string | null;
   variants: VariantRow[] | null;
 };
-// priceLo/priceHi: true min/max across ALL of the product's variants (not just min_price) —
-// bounds and the price filter need the real range, or an expensive colour/size never shows up (see computeBounds).
+// priceLo/priceHi: the true effective-price (sale-aware) min/max across the product's VISIBLE variants
+// (not just min_price) — bounds and the price filter need the real range, or an expensive colour/size
+// never shows up (see computeBounds). `price` is priceLo: the "від" price, what price_asc/desc sort by.
 type BaseProduct = CatalogProductDetails & { createdAt: string; allOptionNames: string[]; priceLo: number; priceHi: number };
 
 const isAllCategory = (types: string[]) => types.length === 0 || types.includes("Всі") || types.includes("All");
@@ -54,7 +56,7 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
     .select(
       `id, slug, model, min_price, created_at, catalog,
        ${filterBySub ? "product_subcategories!inner ( subcategory_option_id )," : ""}
-       variants ( id, price, discounted_price, sort_order, variant_images ( sort_order, images ( url, url_compressed ) ), variant_options ( options ( name, value ) ) )`
+       variants ( id, price, discounted_price, visible, sort_order, variant_images ( sort_order, images ( url, url_compressed ) ), variant_options ( options ( name, value ) ) )`
     )
     .eq("visible", true)
     // The photos-per-variant limit is counted by Postgres, not by the worker.
@@ -72,19 +74,9 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
       const allOptionNames = new Set<string>();
       const seenLooks = new Set<string>();
       const variations: VariationImage[] = [];
-      // Checkbox options ("Так") — to the end, as on the product page: the card shows the unticked checkboxes.
-      const boolYes = (v: VariantRow) =>
-        (v.variant_options || []).some((vo) => vo.options?.value === BOOL_YES) ? 1 : 0;
-      // Priority values ("Щит" and so on) — to the front, as on the product page. A sum, not a minimum —
-      // so that priority on one axis doesn't drown out priority on another (see products.ts).
-      const rank = (v: VariantRow) =>
-        (v.variant_options || []).reduce((sum, vo) => sum + optionValueRank(vo.options?.value || ""), 0);
-      // ponytail: sort keys computed once per variant, not inside the comparator — it used to
-      // re-scan both sides' options on every comparison (see visibleSorted in products.ts).
-      const ordered = (product.variants || [])
-        .map((v) => ({ v, bool: boolYes(v), rank: rank(v), order: v.sort_order || 0 }))
-        .sort((a, b) => a.bool - b.bool || a.rank - b.rank || a.order - b.order)
-        .map((d) => d.v);
+      // Same visibility + order as the product page (variantRules.ts): hidden variants never become
+      // swatches or count towards the price range, and the first card variation is the page default.
+      const ordered = visibleSorted(product.variants);
       for (const variation of ordered) {
         const linked = (variation.variant_options || []).map((vo) => vo.options).filter(Boolean) as OptionRow[];
         const names = linked.map((o) => o.name || "").filter(Boolean);
@@ -92,8 +84,7 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
         const look = imageGroupKey(names);
         if (seenLooks.has(look)) continue;
         seenLooks.add(look);
-        const price = Number(variation.price || 0);
-        const discounted = Number(variation.discounted_price || 0);
+        const { price, discountedPrice } = variantPricing(variation);
         variations.push({
           id: variation.id,
           allHexes: linked.map((o) => ({ hex: o.value || "", name: o.name || "" })),
@@ -101,18 +92,18 @@ async function fetchCatalogBase(catalogs: string[], subs: string[]): Promise<Bas
             .filter((r) => r.images)
             .map((r) => r.images!.url_compressed || r.images!.url),
           price: String(price),
-          discountedPrice: discounted > 0 && discounted < price ? String(discounted) : undefined,
+          discountedPrice: discountedPrice != null ? String(discountedPrice) : undefined,
         });
       }
-      const variantPrices = ordered.map((v) => Number(v.price || 0)).filter((p) => p > 0);
+      const { lo, hi } = priceRange(ordered, product.min_price);
       return {
         id: product.id,
         slug: product.slug,
         name: product.model || "Без назви",
         href: productHref(product),
-        price: Number(product.min_price || 0),
-        priceLo: variantPrices.length > 0 ? Math.min(...variantPrices) : 0,
-        priceHi: variantPrices.length > 0 ? Math.max(...variantPrices) : 0,
+        price: lo,
+        priceLo: lo,
+        priceHi: hi,
         createdAt: product.created_at || "",
         catalog: product.catalog,
         variations,
@@ -151,7 +142,7 @@ async function fetchFilterOptions() {
     supabaseAdmin().from("option_filters").select("name, categories, sort_order").order("sort_order"),
     supabaseAdmin()
       .from("products")
-      .select("catalog, variants ( variant_options ( options ( name, value, sort_order ) ) )")
+      .select("catalog, variants ( visible, variant_options ( options ( name, value, sort_order ) ) )")
       .eq("visible", true),
     supabaseAdmin().from("specs").select("name").eq("filterable", true),
   ]);
@@ -167,11 +158,12 @@ async function fetchFilterOptions() {
   const optionInfo = new Map<string, { hex: string; sortOrder: number; cats: Set<string> }>();
   for (const product of (products || []) as unknown as {
     catalog: string | null;
-    variants: { variant_options: { options: OptionRow & { sort_order: number | null } | null }[] | null }[] | null;
+    variants: { visible: boolean | null; variant_options: { options: OptionRow & { sort_order: number | null } | null }[] | null }[] | null;
   }[]) {
     const cat = (product.catalog || "").trim();
     if (!cat) continue;
-    for (const v of product.variants || []) {
+    // A value that only hidden variants carry would be a filter option matching nothing.
+    for (const v of (product.variants || []).filter(isStorefrontVisible)) {
       for (const vo of v.variant_options || []) {
         const name = (vo.options?.name || "").trim();
         if (!name || !name.includes(":")) continue;
@@ -324,9 +316,10 @@ function sortCatalog(catalog: BaseProduct[], sort: string): BaseProduct[] {
   return sorted;
 }
 
-// Bounds and the filter below both use priceLo/priceHi (the true per-product range) — using
+// Bounds and the filter below both use priceLo/priceHi (the true per-product effective-price range) — using
 // products.min_price for both made an expensive colour/size invisible to the slider AND the filter;
-// using the priciest variant for bounds alone made the slider's max unreachable by a min_price-only filter.
+// using the priciest variant for bounds alone made the slider's max unreachable by a min_price-only filter;
+// using the regular price hid a discounted variant from a range only its sale price falls in.
 function computeBounds(catalog: BaseProduct[]): { min: number; max: number } | null {
   if (catalog.length === 0) return null;
   let min = Infinity;
@@ -345,8 +338,8 @@ export async function getFilteredCatalog(params: FilterParamsWithArrays): Promis
   const base = await getCatalogBase(catalogNames, catalogNames.length > 0 ? [...sub].sort() : []);
   let catalog = await filterCatalogBeforePrice(base, optionFilters, specFilters);
 
-  // Range overlap: a product matches if ANY of its variants could fall in [priceMin, priceMax],
-  // not just its cheapest one (products.min_price, what price_asc/price_desc still sorts by).
+  // Range overlap: a product matches if ANY of its visible variants' effective prices could fall in
+  // [priceMin, priceMax], not just its cheapest one.
   if (priceMin != null) catalog = catalog.filter((p) => p.priceHi >= priceMin);
   if (priceMax != null) catalog = catalog.filter((p) => p.priceLo <= priceMax);
 
