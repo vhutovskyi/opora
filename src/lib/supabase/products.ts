@@ -1,5 +1,5 @@
 import { cache } from "react";
-import { unstable_cache } from "next/cache";
+import { coalescedCache } from "@/lib/cache/coalescedCache";
 import { BOOL_YES, optionValueRank } from "@/lib/constants";
 import { collectSnippetIds, resolveSnippets, type LongDescriptionBlock } from "@/lib/longDescription/types";
 import { supabaseAdmin, isMissingTable, isMissingColumn, byIdOrSlug } from "./client";
@@ -388,7 +388,7 @@ async function resolveProductSnippets(raw: unknown): Promise<LongDescriptionBloc
 // uuid FIRST, so the heavy detail entry below is stored and tagged ONCE per product instead of once
 // per URL spelling — otherwise bumpProduct(id) would purge the uuid copy and leave the slug copy stale.
 // Tiny row, so this extra lookup costs nothing next to the payload it de-duplicates.
-const resolveProductId = unstable_cache(
+const resolveProductId = coalescedCache(
   async (idOrSlug: string): Promise<string | null> => {
     // byIdOrSlug returns null when the param matches neither regex — load-bearing, it keeps
     // ilike from seeing a "%" wildcard and returning an arbitrary product.
@@ -408,7 +408,7 @@ const resolveProductId = unstable_cache(
 // thing in the app (a bed has ~1000 variants). See bumpProduct in admin/actions/_shared.ts.
 // A fresh wrapper per id is how the tag is made dynamic — unstable_cache takes tags statically.
 const fetchProductDetail = (productId: string) =>
-  unstable_cache(
+  coalescedCache(
     async (): Promise<PackedDetail | null> => {
   const { data, error } = await supabaseAdmin()
     .from("products")
@@ -484,7 +484,7 @@ const fetchProductDetail = (productId: string) =>
 // product pages. It used to be tagged "product", which no targeted purge path ever touched —
 // an uploaded photo stayed invisible here for the full hour of the TTL.
 export const VARIANT_MEDIA_TAG = "variant-media";
-export const getVariantMedia = unstable_cache(
+export const getVariantMedia = coalescedCache(
   async (variantId: string): Promise<VariantMedia | null> => {
     const { data, error } = await supabaseAdmin()
       .from("variants")
@@ -504,7 +504,7 @@ export const getVariantMedia = unstable_cache(
 // One column of the /compare page. Cached per VARIANT, not per list: the list comes from a public
 // URL, so per-list keys would be unbounded, while the same variant shows up in many lists.
 // Tagged "catalog" (name/price/visibility) + variant media (photos/specs) — both purged by bump/bumpProduct.
-const getCompareVariant = unstable_cache(
+const getCompareVariant = coalescedCache(
   async (variantId: string): Promise<CompareVariant | null> => {
     const { data, error } = await supabaseAdmin()
       .from("variants")
@@ -558,7 +558,7 @@ export const getProductById = cache(async (idOrSlug: string): Promise<ProductDet
 // Markdown info per option axis ("Матеріал", "Відстань між ламелями" …), set in
 // admin/filters. Site-wide (not per-product), so cached independently of getProductById —
 // keyed as a Record for O(1) lookup by group.key in BuyBox.
-export const getOptionGroupInfo = unstable_cache(
+export const getOptionGroupInfo = coalescedCache(
   async (): Promise<Record<string, string>> => {
     const { data, error } = await supabaseAdmin().from("option_group_info").select("key, info");
     if (error) {

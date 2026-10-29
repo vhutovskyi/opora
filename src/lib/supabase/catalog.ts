@@ -1,4 +1,4 @@
-import { unstable_cache } from "next/cache";
+import { coalescedCache } from "@/lib/cache/coalescedCache";
 import { BOOL_YES, optionValueRank } from "@/lib/constants";
 import { supabaseAdmin } from "./client";
 import { imageGroupKey } from "./imageGroups";
@@ -235,7 +235,7 @@ async function fetchCatalogs(): Promise<string[]> {
   return ((data || []) as { name: string | null }[]).map((c) => c.name || "").filter(Boolean);
 }
 
-export const getCatalogs = unstable_cache(fetchCatalogs, ["catalog-list"], {
+export const getCatalogs = coalescedCache(fetchCatalogs, ["catalog-list"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
@@ -253,7 +253,7 @@ async function fetchSubcategoryOptions(): Promise<SubcategoryOptionRow[]> {
 }
 
 // The cache key is new — the old data shape (without id/parent_id/sort_order/slug/is_group) must not be served to the new code.
-export const getSubcategoryOptions = unstable_cache(fetchSubcategoryOptions, ["catalog-subcategory-options-v4"], {
+export const getSubcategoryOptions = coalescedCache(fetchSubcategoryOptions, ["catalog-subcategory-options-v4"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
@@ -268,19 +268,19 @@ async function fetchProductRefs(): Promise<string[]> {
 }
 
 // The cache key was changed together with the data shape — otherwise the old entry would serve bare uuids.
-export const getProductRefs = unstable_cache(fetchProductRefs, ["catalog-product-refs"], {
+export const getProductRefs = coalescedCache(fetchProductRefs, ["catalog-product-refs"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
 
 // The cache is keyed on (catalog, subcatalog) — not on every filter combination: the options/specs
 // and the sorting are computed in memory over the cached base, without a new DB request.
-const getCatalogBase = unstable_cache(fetchCatalogBase, ["catalog-base"], {
+const getCatalogBase = coalescedCache(fetchCatalogBase, ["catalog-base"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
 
-const getSpecFilterIndex = unstable_cache(fetchSpecFilterIndex, ["catalog-spec-index"], {
+const getSpecFilterIndex = coalescedCache(fetchSpecFilterIndex, ["catalog-spec-index"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
@@ -422,7 +422,7 @@ export function paginateCatalog(
   return { products: page, nextCursor: end < products.length ? page[page.length - 1].id : null };
 }
 
-export const getFilterOptions = unstable_cache(fetchFilterOptions, ["catalog-filter-options"], {
+export const getFilterOptions = coalescedCache(fetchFilterOptions, ["catalog-filter-options"], {
   revalidate: 3600,
   tags: ["catalog"],
 });

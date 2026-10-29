@@ -9,7 +9,8 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "opora",
-	"main": ".open-next/worker.js",
+	// Not .open-next/worker.js directly: worker.ts re-exports it plus the CacheCoordinator Durable Object.
+	"main": "worker.ts",
 	"compatibility_date": "2026-05-18",
 	"compatibility_flags": [
 		"nodejs_compat",
@@ -37,6 +38,21 @@
 			"binding": "NEXT_TAG_CACHE_KV",
 			"id": "f97b7176e86940afaf9ae82507787844"
 		},
+	],
+	// Single-flight for cache rebuilds — see src/lib/cache/coalescedCache.ts.
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CACHE_COORDINATOR",
+				"class_name": "CacheCoordinator"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["CacheCoordinator"]
+		}
 	],
 	"services": [
 		{

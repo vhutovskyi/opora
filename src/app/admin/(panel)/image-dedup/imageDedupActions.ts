@@ -1,6 +1,6 @@
 "use server";
 
-import { updateTag } from "next/cache";
+import { purgeTags } from "@/lib/cache/purgeTags";
 import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { supabaseAdmin } from "@/lib/supabase";
 import { imageGroupKey } from "@/lib/supabase/imageGroups";
@@ -148,6 +148,6 @@ export async function dedupProductImages(productId: string): Promise<DedupResult
     );
   }
 
-  updateTag("catalog");
+  purgeTags("catalog");
   return { log, deletedFiles, variantsLinked, groups: groups.size };
 }

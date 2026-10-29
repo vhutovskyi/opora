@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
+import { purgeTags } from "@/lib/cache/purgeTags";
 import { uploadImagePair } from "@/lib/r2";
 import { supabaseAdmin } from "@/lib/supabase";
 import { upsertImages, deleteImagesByIds } from "@/lib/supabase/images";
 
-// Same as bump() in admin/actions/_shared.ts — updateTag() is Server-Action-only.
-const purge = () => revalidateTag("catalog", "max");
+// Same as bump() in admin/actions/_shared.ts.
+const purge = () => purgeTags("catalog");
 
 export async function POST(request: NextRequest) {
   try {

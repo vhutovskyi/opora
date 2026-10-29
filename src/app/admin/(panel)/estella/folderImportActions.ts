@@ -1,12 +1,13 @@
 "use server";
 
-import { revalidatePath, updateTag } from "next/cache";
+import { revalidatePath } from "next/cache";
+import { purgeTags } from "@/lib/cache/purgeTags";
 import { supabaseAdmin } from "@/lib/supabase";
 
 const db = () => supabaseAdmin();
 
 function bump() {
-  updateTag("catalog");
+  purgeTags("catalog");
   revalidatePath("/admin");
 }
 

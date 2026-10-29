@@ -1,4 +1,4 @@
-import { unstable_cache } from "next/cache";
+import { coalescedCache } from "@/lib/cache/coalescedCache";
 import { isMissingTable, supabaseAdmin } from "./client";
 import { collectSnippetIds, resolveSnippets, type LongDescriptionBlock } from "@/lib/longDescription/types";
 
@@ -52,14 +52,14 @@ async function fetchPost(slug: string): Promise<Post | null> {
 
 // Tagged "posts", not "catalog": an article edit must not cold-start every product page, and a
 // product edit must not cold-start the articles. bump() still purges both.
-export const getPostBySlug = unstable_cache(fetchPost, ["post"], { revalidate: 3600, tags: ["posts"] });
+export const getPostBySlug = coalescedCache(fetchPost, ["post"], { revalidate: 3600, tags: ["posts"] });
 
 async function fetchPostSlugs(): Promise<string[]> {
   const { data } = await supabaseAdmin().from("posts").select("slug").eq("visible", true).order("slug");
   return (data ?? []).map((p) => p.slug as string);
 }
 
-export const getPostSlugs = unstable_cache(fetchPostSlugs, ["post-slugs"], {
+export const getPostSlugs = coalescedCache(fetchPostSlugs, ["post-slugs"], {
   revalidate: 3600,
   tags: ["posts"],
 });

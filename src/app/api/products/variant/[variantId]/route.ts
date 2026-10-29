@@ -20,7 +20,7 @@ export async function GET(
     if (!media) return NextResponse.json({ error: "Not found" }, { status: 404 });
     // A minute in the browser: enough that clicking through options within a session makes no repeated
     // requests, but a photo just uploaded in the admin panel doesn't stay stuck in the client cache for an hour
-    // (the server cache is purged by revalidateTag in the upload route). A miss = a cheap read from KV.
+    // (the server cache is purged by purgeTags in the upload route). A miss = a cheap read from KV.
     // s-maxage lets Cloudflare's edge absorb the same variant across DIFFERENT visitors, not just repeat
     // hovers in one browser — kept at 60s too, so an admin upload isn't hidden behind a long edge TTL.
     return NextResponse.json(media, {

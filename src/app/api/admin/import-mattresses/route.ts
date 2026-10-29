@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
+import { purgeTags } from "@/lib/cache/purgeTags";
 import path from "node:path";
 import { importMattresses } from "@/lib/importer/mattressesImport";
 
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
       only: body.only,
       skipPhotos: body.skipPhotos,
     });
-    revalidateTag("catalog", "max");
+    purgeTags("catalog");
     return NextResponse.json(result);
   } catch (error) {
     console.error("import-mattresses:", error);

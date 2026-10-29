@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { revalidateTag } from "next/cache";
+import { purgeTags } from "@/lib/cache/purgeTags";
 import { uploadImagePair } from "@/lib/r2";
 import { VARIANT_MEDIA_TAG } from "@/lib/supabase/products";
 import {
@@ -11,15 +11,11 @@ import {
   reorderGroupImage,
 } from "@/lib/supabase/images";
 
-// The same as bump() in admin/actions/_shared.ts, but for a route handler: updateTag can only be
-// called from a Server Action. Without this a freshly uploaded photo didn't reach the site for an hour —
+// The same as bump() in admin/actions/_shared.ts. Without this a freshly uploaded photo didn't reach the site for an hour —
 // getVariantMedia returned a cached empty response and the page showed a mock photo.
 // VARIANT_MEDIA_TAG is what actually makes that true: purging only "catalog" left the per-variant
 // media entries (a different tag) serving the pre-upload photo list until their TTL expired.
-const purge = () => {
-  revalidateTag("catalog", "max");
-  revalidateTag(VARIANT_MEDIA_TAG, "max");
-};
+const purge = () => purgeTags("catalog", VARIANT_MEDIA_TAG);
 
 export async function POST(request: NextRequest) {
   try {

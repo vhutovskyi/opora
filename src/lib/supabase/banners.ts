@@ -1,4 +1,4 @@
-import { unstable_cache } from "next/cache";
+import { coalescedCache } from "@/lib/cache/coalescedCache";
 import { supabaseAdmin } from "./client";
 import { BANNER_TYPES, CategoryBanner, SliderSlide } from "./types";
 
@@ -24,7 +24,7 @@ async function fetchSliderImages(): Promise<SliderSlide[]> {
 }
 
 /** Active slides of the main slider, sorted by "Порядок" — a handful of rows, well under the 2MB unstable_cache limit. */
-export const getSliderImages = unstable_cache(fetchSliderImages, ["banners-slider"], {
+export const getSliderImages = coalescedCache(fetchSliderImages, ["banners-slider"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
@@ -52,7 +52,7 @@ async function fetchCategories(): Promise<CategoryBanner[]> {
 }
 
 /** Category tiles — the active records of type "Категорія". */
-export const getCategories = unstable_cache(fetchCategories, ["banners-categories"], {
+export const getCategories = coalescedCache(fetchCategories, ["banners-categories"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
@@ -74,7 +74,7 @@ async function fetchCatalogHeroImage(): Promise<string | null> {
 }
 
 /** The catalog banner image (a single record of type "Каталог") — one URL, well under the 2MB unstable_cache limit. */
-export const getCatalogHeroImage = unstable_cache(fetchCatalogHeroImage, ["catalog-hero-image"], {
+export const getCatalogHeroImage = coalescedCache(fetchCatalogHeroImage, ["catalog-hero-image"], {
   revalidate: 3600,
   tags: ["catalog"],
 });
